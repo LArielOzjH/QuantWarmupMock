@@ -13,15 +13,15 @@ TP_SIZE=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/nul
 echo "Detected ${TP_SIZE} GPU(s), starting SGLang with tp-size=${TP_SIZE}"
 
 # 启动 SGLang 推理后端（后台运行）
-# --schedule-policy lpm      : LongestPrefixMatch，优先处理 KV cache 命中率高的请求（对 loglikelihood 多选题效果显著）
-# --enable-priority-scheduling: 开启请求级优先级队列，Supreme SLA 任务优先出队
+# --schedule-policy fcfs     : 开启 priority scheduling 时必须用 fcfs 或 lof；优先级队列会覆盖出队顺序
+# --enable-priority-scheduling: 开启请求级优先级队列，Supreme SLA 任务优先出队（要求 fcfs/lof 基础策略）
 # --chunked-prefill-size 4096: 分块 prefill，降低长 prompt 对短 SLA 任务 TTFT 的冲击
 python -m sglang.launch_server \
     --model-path "${MODEL_PATH}" \
     --host 0.0.0.0 \
     --port 30000 \
     --tp-size "${TP_SIZE}" \
-    --schedule-policy lpm \
+    --schedule-policy fcfs \
     --enable-priority-scheduling \
     --chunked-prefill-size 4096 &
 SGLANG_PID=$!
