@@ -16,6 +16,7 @@ SGLang 启动命令（热身阶段，Qwen3-0.6B）：
         --model-path "${MODEL_PATH}" \\
         --host 0.0.0.0 --port 30000 --tp-size <N>
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -26,6 +27,10 @@ log = logging.getLogger(__name__)
 
 class SGLangClient:
     """封装 SGLang HTTP API，支持三种评测请求类型。
+
+    所有推理方法均为 async，使用 httpx.AsyncClient。
+    process_messages() 通过 asyncio.gather 并发处理同一任务的所有 message，
+    使多条请求同时到达 SGLang，触发 continuous batching。
 
     Args:
         base_url:   SGLang 服务地址，如 http://localhost:30000
@@ -44,7 +49,7 @@ class SGLangClient:
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout, trust_env=False)
+        self._client = httpx.AsyncClient(timeout=timeout, trust_env=False)
         self._tokenizer = None
 
         if model_path:
@@ -59,7 +64,7 @@ class SGLangClient:
     # 公开接口
     # ------------------------------------------------------------------
 
-    def generate_until(self, prompt: str, gen_kwargs: dict) -> str:
+    async def generate_until(self, prompt: str, gen_kwargs: dict) -> str:
         """生成文本，遇到 until 停止词或达到 max_gen_toks 时停止。
 
         Returns:
@@ -75,11 +80,11 @@ class SGLangClient:
             "top_k":       gen_kwargs.get("top_k", 1),
             "stop":        stop if stop else None,
         }
-        resp = self._client.post(f"{self.base_url}/v1/completions", json=payload)
+        resp = await self._client.post(f"{self.base_url}/v1/completions", json=payload)
         resp.raise_for_status()
         return resp.json()["choices"][0]["text"]
 
-    def loglikelihood(self, prompt: str, continuation: str) -> float:
+    async def loglikelihood(self, prompt: str, continuation: str) -> float:
         """计算 log P(continuation | prompt)。
 
         使用 SGLang 原生 /generate 端点，获取 input_token_logprobs，
@@ -94,11 +99,11 @@ class SGLangClient:
         payload = {
             "text": full_text,
             "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
-            "return_logprob":        True,
-            "input_token_logprobs":  True,
+            "return_logprob":          True,
+            "input_token_logprobs":    True,
             "return_text_in_logprobs": True,
         }
-        resp = self._client.post(f"{self.base_url}/generate", json=payload)
+        resp = await self._client.post(f"{self.base_url}/generate", json=payload)
         resp.raise_for_status()
         data = resp.json()
 
@@ -110,7 +115,7 @@ class SGLangClient:
         # token_logprobs 格式: list of [logprob, token_id, token_text]
         return sum(entry[0] for entry in token_logprobs[-continuation_token_count:])
 
-    def loglikelihood_rolling(self, prompt: str) -> float:
+    async def loglikelihood_rolling(self, prompt: str) -> float:
         """计算整段 prompt 文本的 total log-likelihood（rolling perplexity 所需）。
 
         Returns:
@@ -122,7 +127,7 @@ class SGLangClient:
             "return_logprob":       True,
             "input_token_logprobs": True,
         }
-        resp = self._client.post(f"{self.base_url}/generate", json=payload)
+        resp = await self._client.post(f"{self.base_url}/generate", json=payload)
         resp.raise_for_status()
         data = resp.json()
 
@@ -133,16 +138,46 @@ class SGLangClient:
         # 跳过第一个 token（无前文，无 logprob 意义）
         return sum(entry[0] for entry in token_logprobs[1:])
 
-    def health(self) -> bool:
+    async def process_messages(self, messages: list[dict]) -> list[dict]:
+        """并发处理一个任务的所有 messages（asyncio.gather）。
+
+        同一任务的多条 message（如 loglikelihood 多选题的 4 个候选答案）
+        同时发往 SGLang，触发 continuous batching：
+        - RadixAttention 对共享 prompt 只做一次 prefill
+        - 4 个 continuation 并行计算
+        - TTFT 接近单条请求延迟，而非 4 倍
+
+        Returns:
+            填充了 response / accuracy 的 messages 列表，顺序与输入一致
+        """
+        async def _process_one(msg: dict) -> dict:
+            m = dict(msg)
+            req_type = msg["eval_request_type"]
+            if req_type == "generate_until":
+                m["response"] = await self.generate_until(msg["prompt"], msg["eval_gen_kwargs"])
+                m["accuracy"] = None
+            elif req_type == "loglikelihood":
+                m["accuracy"] = await self.loglikelihood(msg["prompt"], msg["eval_continuation"])
+                m["response"] = None
+            elif req_type == "loglikelihood_rolling":
+                m["accuracy"] = await self.loglikelihood_rolling(msg["prompt"])
+                m["response"] = None
+            else:
+                log.warning(f"Unknown request type: {req_type}")
+            return m
+
+        return list(await asyncio.gather(*(_process_one(msg) for msg in messages)))
+
+    async def health(self) -> bool:
         """检查 SGLang 服务是否就绪。"""
         try:
-            resp = self._client.get(f"{self.base_url}/health", timeout=5.0)
+            resp = await self._client.get(f"{self.base_url}/health", timeout=5.0)
             return resp.status_code == 200
         except Exception:
             return False
 
-    def close(self):
-        self._client.close()
+    async def close(self):
+        await self._client.aclose()
 
     # ------------------------------------------------------------------
     # 内部工具
