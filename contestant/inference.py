@@ -6,9 +6,9 @@ SGLang 推理后端接口
   - loglikelihood：计算 log P(continuation | prompt)
   - loglikelihood_rolling：计算整段 prompt 的 total log-likelihood
 
-SGLang 启动命令（热身阶段，Qwen2.5-7B）：
+SGLang 启动命令（热身阶段，Qwen3-0.6B）：
     python -m sglang.launch_server \\
-        --model-path /path/to/Qwen2.5-7B-Instruct \\
+        --model-path /Users/hanzhuojun/Model/Qwen3-0.6B \\
         --host 0.0.0.0 --port 30000 --tp-size 1
 
 正式预赛（Qwen3-32B，由 run.sh 自动启动）：

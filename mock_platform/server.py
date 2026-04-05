@@ -15,6 +15,7 @@ Mock 评测平台服务器
 """
 import asyncio
 import dataclasses
+import random
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -133,7 +134,8 @@ async def query(req: QueryReq):
     available = _state["available_tasks"]
     if not available:
         raise HTTPException(status_code=404, detail="no tasks available")
-    return _task_to_overview_dict(available[0])
+    # 随机返回一个任务概要，避免调度器拒绝某任务后循环拿到同一个任务
+    return _task_to_overview_dict(random.choice(available))
 
 
 @app.post("/ask")

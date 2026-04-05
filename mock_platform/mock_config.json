@@ -1,7 +1,7 @@
 {
   "platform_url": "http://localhost:8003",
-  "model_name": "Qwen2.5-7B-Instruct",
-  "model_path": "/path/to/Qwen2.5-7B-Instruct",
+  "model_name": "Qwen3-0.6B",
+  "model_path": "/Users/hanzhuojun/Model/Qwen3-0.6B",
   "contestant_port": 9000,
   "duration_s": 3600,
   "sla_levels": {

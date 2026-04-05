@@ -4,7 +4,7 @@ SGLang 集成测试
 需要 SGLang 服务在 localhost:30000 运行，使用 pytest -m integration 触发：
 
     python -m sglang.launch_server \\
-        --model-path /path/to/Qwen2.5-7B-Instruct \\
+        --model-path /Users/hanzhuojun/Model/Qwen3-0.6B \\
         --host 0.0.0.0 --port 30000 --tp-size 1
 
     python -m pytest tests/test_inference.py -m integration -v
@@ -15,13 +15,14 @@ sys.path.insert(0, ".")
 import pytest
 
 SGLANG_URL = "http://localhost:30000"
-MODEL_PATH = None   # 填入模型路径后 tokenizer 才会加载
+MODEL_NAME = "Qwen3-0.6B"
+MODEL_PATH = "/Users/hanzhuojun/Model/Qwen3-0.6B"
 
 
 @pytest.fixture(scope="module")
 def client():
     from contestant.inference import SGLangClient
-    c = SGLangClient(SGLANG_URL, "Qwen2.5-7B-Instruct", MODEL_PATH)
+    c = SGLangClient(SGLANG_URL, MODEL_NAME, MODEL_PATH)
     yield c
     c.close()
 
