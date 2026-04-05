@@ -1,6 +1,6 @@
-# Inference Serving Competition — Contestant Framework
+# UBIQUANT Competition — Contestant Framework
 
-A complete participant framework for an LLM inference serving competition, including a local mock platform for warmup and a production-ready contestant service backed by SGLang.
+A complete participant framework for an UBIQUANT LLM inference serving competition, including a local mock platform for warmup and a production-ready contestant service backed by SGLang.
 
 ---
 
@@ -22,7 +22,7 @@ Each task carries an SLA level (Bronze → Supreme) with increasing TTFT require
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      Competition LAN                          │
+│                      Competition LAN                         │
 │                                                              │
 │  ┌─────────────────┐          ┌────────────────────────────┐ │
 │  │  Evaluation     │  HTTP    │     Contestant Machine     │ │
@@ -32,7 +32,7 @@ Each task carries an SLA level (Bronze → Supreme) with increasing TTFT require
 │  │  /ask           │          │  │  poller coroutine    │  │ │
 │  │  /submit ───────┼──────────┼─►│  query → accept      │  │ │
 │  └─────────────────┘          │  └──────────┬───────────┘  │ │
-│                               │             │ PriorityQueue │ │
+│                               │             │ PriorityQueue│ │
 │                               │  ┌──────────▼───────────┐  │ │
 │                               │  │  dispatcher          │  │ │
 │                               │  │  (priority order)    │  │ │
