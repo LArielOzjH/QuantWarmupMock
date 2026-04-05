@@ -18,9 +18,9 @@ build/
 *.safetensors
 *.gguf
 
-# Plan documents (local only)
+# Plan and competition documents (local only)
 PLAN.md
-PLAN.pdf
+*.pdf
 
 # macOS
 .DS_Store
