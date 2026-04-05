@@ -123,8 +123,8 @@ class SGLangClient:
 
         token_logprobs = data.get("input_token_logprobs", [])
         if not token_logprobs:
-            log.warning("SGLang returned empty input_token_logprobs, returning -inf")
-            return float("-inf")
+            log.warning("SGLang returned empty input_token_logprobs, returning -100.0")
+            return -100.0
 
         # token_logprobs 格式: list of [logprob, token_id, token_text]
         return sum(entry[0] for entry in token_logprobs[-continuation_token_count:])
@@ -151,7 +151,7 @@ class SGLangClient:
 
         token_logprobs = data.get("input_token_logprobs", [])
         if not token_logprobs:
-            return float("-inf")
+            return -100.0
 
         # 跳过第一个 token（无前文，无 logprob 意义）
         return sum(entry[0] for entry in token_logprobs[1:])
