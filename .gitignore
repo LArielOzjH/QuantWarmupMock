@@ -1,10 +1,26 @@
-sglang/
+# Virtual environments
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
-.pytest_cache/
 *.egg-info/
 dist/
 build/
+
+# Pytest
+.pytest_cache/
+
+# Model weights (never commit)
+/Users/hanzhuojun/Model/
+*.bin
+*.safetensors
+*.gguf
+
+# Plan documents (local only)
+PLAN.md
+PLAN.pdf
+
+# macOS
 .DS_Store

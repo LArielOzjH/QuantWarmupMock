@@ -19,5 +19,10 @@
     "Normal":         {"temperature": 0.1, "top_p": 0.9,  "top_k": 50},
     "HighEntropy":    {"temperature": 0.1, "top_p": 0.95, "top_k": 100},
     "ExtremePenalty": {"temperature": 0.1, "top_p": 0.9,  "top_k": 20}
-  }
+  },
+  "_available_models": {
+    "Qwen3-0.6B":    "/Users/hanzhuojun/Model/Qwen3-0.6B",
+    "gemma-4-E2B-it": "/Users/hanzhuojun/Model/gemma-4-E2B-it"
+  },
+  "_note": "Switch model_name + model_path to use a different local model"
 }

@@ -15,6 +15,8 @@ sys.path.insert(0, ".")
 import pytest
 
 SGLANG_URL = "http://localhost:30000"
+
+# Switch to "gemma-4-E2B-it" / "/Users/hanzhuojun/Model/gemma-4-E2B-it" to test the other model
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = "/Users/hanzhuojun/Model/Qwen3-0.6B"
 
