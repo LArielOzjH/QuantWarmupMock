@@ -7,20 +7,18 @@ source .venv/bin/activate
 
 pip install -r contestant/requirements.txt
 
-# Install sglang from local submodule (editable, source changes take effect immediately).
-# We intentionally omit [all] extras to avoid cuda-python exact-version conflicts:
-# sglang[all] pins cuda-python==12.9, but many servers ship cuda-python==12.8.x.
-# The contestant code never imports sglang Python — it only calls python -m sglang.launch_server
-# as a subprocess — so the core install is sufficient.
 if [ -d "sglang" ]; then
+    # sglang 0.5.10rc0 在基础依赖中写死了 cuda-python==12.9。
+    # 竞赛服务器安装的是 CUDA 12.8，对应 cuda-python==12.8.0，版本不兼容。
+    # 将严格 pin 改为下限约束，让 pip 接受已有的 12.8.0（API 兼容，无功能影响）。
+    sed -i 's/cuda-python==12\.9/cuda-python>=12.8/' sglang/python/pyproject.toml
     pip install -e "sglang/python/"
 else
     echo "WARNING: sglang/ submodule not found, installing latest sglang from PyPI"
     pip install "sglang[srt]"
 fi
 
-# flash-attn is not in sglang[core] but significantly improves throughput.
-# Build can fail on some CUDA/GCC configurations; we treat it as optional.
+# flash-attn 不在 sglang 基础依赖中，但能显著提升吞吐量，安装失败不阻断流程
 echo "Attempting to install flash-attn (optional, improves throughput)..."
 pip install flash-attn --no-build-isolation 2>/dev/null \
     && echo "flash-attn installed." \
