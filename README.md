@@ -45,7 +45,7 @@ Each task carries an SLA level (Bronze → Supreme) with increasing TTFT require
 │                               │             │ async HTTP   │ │
 │                               │  ┌──────────▼───────────┐  │ │
 │                               │  │  SGLang :30000       │  │ │
-│                               │  │  LPM + priority      │  │ │
+│                               │  │  fcfs + priority     │  │ │
 │                               │  │  continuous batching │  │ │
 │                               │  └──────────────────────┘  │ │
 │                               └────────────────────────────┘ │
@@ -365,7 +365,7 @@ curl http://localhost:8003/status
 python -m sglang.launch_server \
     --model-path /path/to/model \
     --host 0.0.0.0 --port 30000 --tp-size 1 \
-    --schedule-policy lpm \
+    --schedule-policy fcfs \
     --enable-priority-scheduling \
     --chunked-prefill-size 4096
 
@@ -410,7 +410,7 @@ python -m pytest tests/test_inference.py -m integration -v
 | Aspect | Warmup | Competition |
 |--------|--------|-------------|
 | Platform | `localhost:8003` (mock) | Official platform (LAN) |
-| Model | Local small model | Qwen3-32B (`/mnt/model/`) |
+| Model | Qwen3-8B (warmup) | Qwen3-32B (`/mnt/model/`) |
 | Task stream | Synthetic, from `task_generator.py` | Real, from official task pool |
 | Correctness scoring | Always 1.0 (no reference model) | Compared against reference model output |
 | Startup limit | None | `run.sh` must complete in 60 s |
@@ -423,6 +423,6 @@ python -m pytest tests/test_inference.py -m integration -v
 1. ~~**Async concurrent task processing**~~ ✅ **Done** — `asyncio.create_task` per accepted task; `process_messages()` uses `asyncio.gather` for intra-task message parallelism
 2. ~~**Contestant-side priority queue**~~ ✅ **Done** — `asyncio.PriorityQueue` dispatches highest `w_sla × w_task` tasks first; SGLang receives `priority` field per request
 3. ~~**Sliding window latency tracker**~~ ✅ **Done** — `LatencyTracker` feeds `should_accept()` to reject tasks whose historical latency already violates SLA
-4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy lpm --enable-priority-scheduling --chunked-prefill-size 4096`
+4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy fcfs --enable-priority-scheduling --chunked-prefill-size 4096`
 5. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
 6. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
