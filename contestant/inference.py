@@ -14,7 +14,9 @@ SGLang 启动命令（热身阶段，Qwen3-0.6B）：
 正式预赛（Qwen3-32B，由 run.sh 自动启动）：
     python -m sglang.launch_server \\
         --model-path "${MODEL_PATH}" \\
-        --host 0.0.0.0 --port 30000 --tp-size <N>
+        --host 0.0.0.0 --port 30000 --tp-size <N> \\
+        --schedule-policy lpm --enable-priority-scheduling \\
+        --chunked-prefill-size 4096
 """
 import asyncio
 import logging
@@ -31,6 +33,10 @@ class SGLangClient:
     所有推理方法均为 async，使用 httpx.AsyncClient。
     process_messages() 通过 asyncio.gather 并发处理同一任务的所有 message，
     使多条请求同时到达 SGLang，触发 continuous batching。
+
+    priority 参数（0-7）透传给 SGLang 的内部调度器：
+    - 需要 SGLang 以 --enable-priority-scheduling 启动
+    - 未开启时 priority 字段被静默忽略，不影响功能
 
     Args:
         base_url:   SGLang 服务地址，如 http://localhost:30000
@@ -64,8 +70,11 @@ class SGLangClient:
     # 公开接口
     # ------------------------------------------------------------------
 
-    async def generate_until(self, prompt: str, gen_kwargs: dict) -> str:
+    async def generate_until(self, prompt: str, gen_kwargs: dict, priority: int = 0) -> str:
         """生成文本，遇到 until 停止词或达到 max_gen_toks 时停止。
+
+        Args:
+            priority: SGLang 内部调度优先级（0=最低，7=最高）；需服务端开启优先调度
 
         Returns:
             生成的文本字符串（不含 prompt）
@@ -79,16 +88,20 @@ class SGLangClient:
             "top_p":       gen_kwargs.get("top_p", 1.0),
             "top_k":       gen_kwargs.get("top_k", 1),
             "stop":        stop if stop else None,
+            "priority":    priority,
         }
         resp = await self._client.post(f"{self.base_url}/v1/completions", json=payload)
         resp.raise_for_status()
         return resp.json()["choices"][0]["text"]
 
-    async def loglikelihood(self, prompt: str, continuation: str) -> float:
+    async def loglikelihood(self, prompt: str, continuation: str, priority: int = 0) -> float:
         """计算 log P(continuation | prompt)。
 
         使用 SGLang 原生 /generate 端点，获取 input_token_logprobs，
         提取 continuation 部分 token 的 logprob 之和。
+
+        Args:
+            priority: SGLang 内部调度优先级（0=最低，7=最高）
 
         Returns:
             对数概率（负数，越接近 0 越好）
@@ -102,6 +115,7 @@ class SGLangClient:
             "return_logprob":          True,
             "input_token_logprobs":    True,
             "return_text_in_logprobs": True,
+            "priority":                priority,
         }
         resp = await self._client.post(f"{self.base_url}/generate", json=payload)
         resp.raise_for_status()
@@ -115,8 +129,11 @@ class SGLangClient:
         # token_logprobs 格式: list of [logprob, token_id, token_text]
         return sum(entry[0] for entry in token_logprobs[-continuation_token_count:])
 
-    async def loglikelihood_rolling(self, prompt: str) -> float:
+    async def loglikelihood_rolling(self, prompt: str, priority: int = 0) -> float:
         """计算整段 prompt 文本的 total log-likelihood（rolling perplexity 所需）。
+
+        Args:
+            priority: SGLang 内部调度优先级（0=最低，7=最高）
 
         Returns:
             所有 token（除第一个）的 logprob 之和
@@ -126,6 +143,7 @@ class SGLangClient:
             "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
             "return_logprob":       True,
             "input_token_logprobs": True,
+            "priority":             priority,
         }
         resp = await self._client.post(f"{self.base_url}/generate", json=payload)
         resp.raise_for_status()
@@ -138,7 +156,7 @@ class SGLangClient:
         # 跳过第一个 token（无前文，无 logprob 意义）
         return sum(entry[0] for entry in token_logprobs[1:])
 
-    async def process_messages(self, messages: list[dict]) -> list[dict]:
+    async def process_messages(self, messages: list[dict], priority: int = 0) -> list[dict]:
         """并发处理一个任务的所有 messages（asyncio.gather）。
 
         同一任务的多条 message（如 loglikelihood 多选题的 4 个候选答案）
@@ -147,6 +165,9 @@ class SGLangClient:
         - 4 个 continuation 并行计算
         - TTFT 接近单条请求延迟，而非 4 倍
 
+        Args:
+            priority: 透传给所有底层推理请求的 SGLang 优先级
+
         Returns:
             填充了 response / accuracy 的 messages 列表，顺序与输入一致
         """
@@ -154,13 +175,19 @@ class SGLangClient:
             m = dict(msg)
             req_type = msg["eval_request_type"]
             if req_type == "generate_until":
-                m["response"] = await self.generate_until(msg["prompt"], msg["eval_gen_kwargs"])
+                m["response"] = await self.generate_until(
+                    msg["prompt"], msg["eval_gen_kwargs"], priority=priority
+                )
                 m["accuracy"] = None
             elif req_type == "loglikelihood":
-                m["accuracy"] = await self.loglikelihood(msg["prompt"], msg["eval_continuation"])
+                m["accuracy"] = await self.loglikelihood(
+                    msg["prompt"], msg["eval_continuation"], priority=priority
+                )
                 m["response"] = None
             elif req_type == "loglikelihood_rolling":
-                m["accuracy"] = await self.loglikelihood_rolling(msg["prompt"])
+                m["accuracy"] = await self.loglikelihood_rolling(
+                    msg["prompt"], priority=priority
+                )
                 m["response"] = None
             else:
                 log.warning(f"Unknown request type: {req_type}")

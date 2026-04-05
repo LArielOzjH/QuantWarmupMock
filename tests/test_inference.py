@@ -50,6 +50,26 @@ async def test_process_messages_generate_until():
     await client.close()
 
 
+async def test_process_messages_passes_priority():
+    """process_messages 将 priority 透传给底层推理方法。"""
+    client = SGLangClient(SGLANG_URL, "test-model")
+    client.generate_until = AsyncMock(return_value="answer")
+
+    messages = [{
+        "ID": 0,
+        "prompt": "Q?",
+        "eval_request_type": "generate_until",
+        "eval_gen_kwargs": {"until": ["\n"], "max_gen_toks": 16,
+                            "temperature": 0.0, "top_p": 1.0, "top_k": 1},
+        "eval_continuation": None,
+    }]
+    await client.process_messages(messages, priority=7)
+    client.generate_until.assert_called_once()
+    _, kwargs = client.generate_until.call_args
+    assert kwargs.get("priority") == 7
+    await client.close()
+
+
 async def test_process_messages_loglikelihood_concurrent():
     """process_messages 并发调用 loglikelihood，结果顺序与输入一致。"""
     client = SGLangClient(SGLANG_URL, "test-model")
