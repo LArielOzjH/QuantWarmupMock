@@ -1,0 +1,6 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0
+transformers>=4.40.0
+pydantic>=2.7.0
+# sglang 通过 setup.sh 从本地 clone 安装，不在此列

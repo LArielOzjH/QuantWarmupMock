@@ -1,0 +1,23 @@
+{
+  "platform_url": "http://localhost:8003",
+  "model_name": "Qwen2.5-7B-Instruct",
+  "model_path": "/path/to/Qwen2.5-7B-Instruct",
+  "contestant_port": 9000,
+  "duration_s": 3600,
+  "sla_levels": {
+    "Bronze":   {"ttft_avg": 10.0},
+    "Silver":   {"ttft_avg": 8.0},
+    "Gold":     {"ttft_avg": 6.0},
+    "Platinum": {"ttft_avg": 4.0},
+    "Diamond":  {"ttft_avg": 2.0},
+    "Stellar":  {"ttft_avg": 1.5},
+    "Glorious": {"ttft_avg": 0.8},
+    "Supreme":  {"ttft_avg": 0.5}
+  },
+  "sampling_params": {
+    "Deterministic":  {"temperature": 0.0, "top_p": 1.0,  "top_k": 1},
+    "Normal":         {"temperature": 0.1, "top_p": 0.9,  "top_k": 50},
+    "HighEntropy":    {"temperature": 0.1, "top_p": 0.95, "top_k": 100},
+    "ExtremePenalty": {"temperature": 0.1, "top_p": 0.9,  "top_k": 20}
+  }
+}
