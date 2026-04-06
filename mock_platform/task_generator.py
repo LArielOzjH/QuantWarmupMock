@@ -4,16 +4,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-# 题库：故意复用 prompt，测试 KV Cache 命中率
+# ---------------------------------------------------------------------------
+# 题库：8 SLA × 3 类型 = 24 道题
+# 每道题绑定固定 SLA，保证每个 SLA 等级都能被测试到（含 Glorious/Supreme）。
+# max_gen_toks 随 SLA 升高而减小，确保高 SLA 任务在时限内可完成。
+# ---------------------------------------------------------------------------
 PROMPT_POOL = [
+    # ── Bronze（10s SLA）── 长任务，答案可以详细 ──────────────────────────────
     {
         "type": "generate_until",
-        "prompt": "Question: What is 2+2?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 16,
-    },
-    {
-        "type": "generate_until",
+        "sla":  "Bronze",
         "prompt": (
             "Question: Natalia sold clips to 48 of her friends in April, "
             "and then she sold half as many clips in May. "
@@ -23,45 +23,171 @@ PROMPT_POOL = [
         "max_gen_toks": 256,
     },
     {
+        "type": "loglikelihood",
+        "sla":  "Bronze",
+        "prompt": "The capital of France is",
+        "choices": [" Paris", " London", " Berlin", " Madrid"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Bronze",
+        "prompt": (
+            "The quick brown fox jumps over the lazy dog. "
+            "This classic sentence is often used to test typefaces because it "
+            "contains every letter of the English alphabet at least once."
+        ),
+    },
+
+    # ── Silver（8s SLA）──────────────────────────────────────────────────────
+    {
         "type": "generate_until",
+        "sla":  "Silver",
+        "prompt": (
+            "Question: A store had 120 apples. They sold 45 apples on Monday "
+            "and received a new shipment of 30 apples on Tuesday. "
+            "How many apples does the store have now?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 128,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Silver",
+        "prompt": "Which programming language is primarily used in data science?",
+        "choices": [" Python", " Assembly", " COBOL", " Fortran"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Silver",
+        "prompt": (
+            "Once upon a time in a land far away, there lived a wise old wizard "
+            "who knew the secrets of the universe and shared them only with those "
+            "who were pure of heart."
+        ),
+    },
+
+    # ── Gold（6s SLA）───────────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Gold",
+        "prompt": "Question: What is 2+2?\nAnswer:",
+        "until": ["\n"],
+        "max_gen_toks": 16,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Gold",
+        "prompt": "The chemical symbol for water is",
+        "choices": [" H2O", " CO2", " NaCl", " O2"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Gold",
+        "prompt": "The mitochondria is the powerhouse of the cell.",
+    },
+
+    # ── Platinum（4s SLA）───────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Platinum",
         "prompt": "Question: Which planet is closest to the Sun?\nAnswer:",
         "until": ["\n"],
         "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
-        "prompt": "The capital of France is",
-        "choices": ["Paris", "London", "Berlin", "Madrid"],
-    },
-    {
-        "type": "loglikelihood",
-        "prompt": "Which programming language is primarily used in data science?",
-        "choices": ["Python", "Assembly", "COBOL", "Fortran"],
-    },
-    {
-        "type": "loglikelihood",
-        "prompt": "The chemical symbol for water is",
-        "choices": ["H2O", "CO2", "NaCl", "O2"],
+        "sla":  "Platinum",
+        "prompt": "The largest planet in our solar system is",
+        "choices": [" Jupiter", " Saturn", " Mars", " Neptune"],
     },
     {
         "type": "loglikelihood_rolling",
-        "prompt": "Once upon a time in a land far away, there lived a wise old wizard.",
-    },
-    {
-        "type": "loglikelihood_rolling",
+        "sla":  "Platinum",
         "prompt": (
-            "The quick brown fox jumps over the lazy dog. "
-            "This sentence contains every letter of the English alphabet."
+            "In mathematics, the Pythagorean theorem states that in a right triangle "
+            "the square of the hypotenuse equals the sum of the squares of the other two sides."
         ),
     },
-]
 
-# SLA 分布：偏向中等 SLA（Gold/Platinum），极端等级概率低
-SLA_DISTRIBUTION = [
-    "Bronze", "Silver",
-    "Gold", "Gold", "Gold",
-    "Platinum", "Platinum",
-    "Diamond", "Stellar",
+    # ── Diamond（2s SLA）────────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Diamond",
+        "prompt": "Question: What is the boiling point of water in Celsius?\nAnswer:",
+        "until": ["\n"],
+        "max_gen_toks": 16,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Diamond",
+        "prompt": "Which scientist developed the theory of general relativity?",
+        "choices": [" Einstein", " Newton", " Curie", " Tesla"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Diamond",
+        "prompt": "E equals mc squared is Einstein's famous mass-energy equivalence formula.",
+    },
+
+    # ── Stellar（1.5s SLA）──────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Stellar",
+        "prompt": "Question: How many days are in a week?\nAnswer:",
+        "until": ["\n"],
+        "max_gen_toks": 8,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Stellar",
+        "prompt": "The process by which plants convert sunlight into energy is called",
+        "choices": [" photosynthesis", " respiration", " fermentation", " osmosis"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Stellar",
+        "prompt": "Water freezes at zero degrees Celsius.",
+    },
+
+    # ── Glorious（0.8s SLA）─────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Glorious",
+        "prompt": "Question: What color is the sky on a clear day?\nAnswer:",
+        "until": ["\n"],
+        "max_gen_toks": 8,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Glorious",
+        "prompt": "The speed of light in a vacuum is approximately",
+        "choices": [" 3×10^8 m/s", " 3×10^6 m/s", " 3×10^10 m/s", " 3×10^4 m/s"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Glorious",
+        "prompt": "The sun rises in the east.",
+    },
+
+    # ── Supreme（0.5s SLA）──────────────────────────────────────────────────
+    {
+        "type": "generate_until",
+        "sla":  "Supreme",
+        "prompt": "Question: What is 1+1?\nAnswer:",
+        "until": ["\n"],
+        "max_gen_toks": 4,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Supreme",
+        "prompt": "Water boils at",
+        "choices": [" 100°C", " 0°C", " 50°C", " 200°C"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Supreme",
+        "prompt": "Two plus two equals four.",
+    },
 ]
 
 SAMPLING_PARAM_DISTRIBUTION = ["Deterministic", "Deterministic", "Normal", "HighEntropy"]
@@ -111,7 +237,7 @@ def _build_gen_kwargs(sp_name: str, until: list, max_gen_toks: int) -> dict:
 
 def generate_task(task_id: int) -> FullTask:
     item = random.choice(PROMPT_POOL)
-    sla = random.choice(SLA_DISTRIBUTION)
+    sla = item["sla"]
     sp_name = random.choice(SAMPLING_PARAM_DISTRIBUTION)
 
     if item["type"] == "generate_until":
@@ -154,7 +280,7 @@ def generate_task(task_id: int) -> FullTask:
     overview = TaskOverview(
         task_id=task_id,
         target_sla=sla,
-        target_reward=0.0,  # mock：submit 时由 scorer 精算
+        target_reward=0.0,
         eval_task_name=f"mock_{item['type']}",
         eval_request_type=item["type"],
         eval_sampling_param=sp_name,

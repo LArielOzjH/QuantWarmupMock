@@ -113,7 +113,7 @@ class SGLangClient:
             "text": full_text,
             "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
             "return_logprob":          True,
-            "input_token_logprobs":    True,
+            "logprob_start_len":       0,
             "return_text_in_logprobs": True,
             "priority":                priority,
         }
@@ -142,9 +142,9 @@ class SGLangClient:
         payload = {
             "text": prompt,
             "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
-            "return_logprob":       True,
-            "input_token_logprobs": True,
-            "priority":             priority,
+            "return_logprob":    True,
+            "logprob_start_len": 0,
+            "priority":          priority,
         }
         resp = await self._client.post(f"{self.base_url}/generate", json=payload)
         resp.raise_for_status()

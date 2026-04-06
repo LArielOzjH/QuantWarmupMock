@@ -66,12 +66,12 @@ quant/
 │   ├── config.py                # SLA levels, sampling params, task weights
 │   ├── mock_config.json         # Local config (localhost URLs, model paths)
 │   ├── scorer.py                # calc_reward() / calc_penalty()
-│   ├── task_generator.py        # Generates all 3 task types; reuses prompts to stress KV cache
+│   ├── task_generator.py        # 24-task pool (8 SLA × 3 types); each task has fixed SLA binding
 │   └── server.py                # FastAPI: /register /query /ask /submit /scores /status
 │
 ├── contestant/                  # Submission package
 │   ├── config_loader.py         # Reads CONFIG_PATH env var → ContestConfig dataclass
-│   ├── scheduler.py             # SLA-aware accept/reject: load threshold + sliding window latency
+│   ├── scheduler.py             # SLA-aware accept/reject: dynamic EWMA estimate + probe mechanism
 │   ├── inference.py             # SGLangClient: async, process_messages() with asyncio.gather + priority
 │   ├── client.py                # PlatformClient: async, wraps the 4 platform HTTP endpoints
 │   ├── main.py                  # Async main loop: poller → PriorityQueue → dispatcher → workers
@@ -82,7 +82,7 @@ quant/
 │
 ├── tests/
 │   ├── test_scorer.py           # 9 unit tests: reward/penalty formula correctness
-│   ├── test_scheduler.py        # 18 unit tests: load thresholds, LatencyTracker, latency-aware rejection
+│   ├── test_scheduler.py        # 24 unit tests: EWMA, dynamic estimation, probe mechanism
 │   ├── test_client.py           # 8 async unit tests: HTTP client with mocked responses
 │   └── test_inference.py        # 5 async unit tests (no model) + 5 integration tests
 │
@@ -110,19 +110,30 @@ Penalty = −2 × w_task × w_sla × w_sp          (if not submitted within 600 
 
 ## Scheduling Strategy
 
-`contestant/scheduler.py` maintains a per-SLA load threshold. A task is accepted only when both conditions pass:
+`contestant/scheduler.py` uses a dynamic latency-estimation model. A task is accepted when both conditions pass:
 
-**Condition 1 — Load threshold** (`active_count / max_concurrent < threshold`):
+**Condition 1 — Hard concurrency cap** (`active_count < max_concurrent`): never exceed the configured slot limit.
 
-| SLA | Threshold | Reasoning |
-|-----|-----------|-----------|
-| Bronze | 1.0 | Always accept (10 s TTFT, low risk) |
-| Gold | 0.8 | Accept unless near capacity |
-| Supreme | 0.3 | Only accept when very idle (0.5 s TTFT — high penalty risk) |
+**Condition 2 — Dynamic latency estimate**:
 
-**Condition 2 — Latency check** (`avg_latency × 1.3 < sla_ttft`):
+```
+estimated_latency = ewma[task_type] × (1 + load_ratio)
+accept  ←→  estimated_latency < sla_ttft
+```
 
-Sliding window (last 20 completions per `(task_type, sla)` bucket) tracks actual ask→submit latency. If recent latency × safety margin already exceeds the SLA deadline, the task is rejected proactively. During cold-start (no history), this check is skipped.
+- `ewma[task_type]` — per-task-type Exponential Weighted Moving Average (α=0.3) of recent ask→submit latency. Tracked at the task-type level (3 buckets) rather than per `(task_type, sla)` (24 sparse buckets) for faster convergence.
+- `load_ratio` — acts as a queuing factor: at high load each new task waits longer for a GPU slot, so the estimate naturally increases.
+- **Cold start** (no history yet): check skipped, all tasks accepted up to the cap.
+
+Examples with `ewma["generate_until"] = 0.65 s`:
+
+| SLA | TTFT | load=0 estimate | load=0.75 estimate | Decision |
+|-----|------|------------------|--------------------|----------|
+| Glorious | 0.8 s | 0.65 × 1.0 = 0.65 ✓ | 0.65 × 1.75 = 1.14 ✗ | accept / reject |
+| Supreme | 0.5 s | 0.65 > 0.5 ✗ | — | reject |
+| loglikelihood Supreme | 0.5 s | 0.08 × 1.0 = 0.08 ✓ | 0.08 × 1.75 = 0.14 ✓ | always accept |
+
+**Probe mechanism (deadlock prevention)**: if latency-based rejection fires continuously for `PROBE_THRESHOLD=8` consecutive queries of the same `(task_type, sla)`, one task is force-accepted to gather fresh latency data, preventing permanent starvation.
 
 ---
 
@@ -188,7 +199,7 @@ Each HTTP request carries a `priority` field (0–7, mapped from SLA level) that
 SGLang is cloned as a git submodule (`sglang/`) and installed in editable mode on the GPU machine. Three inference modes:
 
 - **`generate_until`** → `POST /v1/completions` (OpenAI-compatible, with stop tokens)
-- **`loglikelihood`** → `POST /generate` with `return_logprob=True, input_token_logprobs=True`; sum logprobs of continuation tokens (token count computed via tokenizer)
+- **`loglikelihood`** → `POST /generate` with `return_logprob=True, logprob_start_len=0`; sum logprobs of continuation tokens (token count computed via tokenizer)
 - **`loglikelihood_rolling`** → same endpoint; sum all input token logprobs (skip first token)
 
 All requests include `"priority": <int>` in the payload. SGLang silently ignores this field if launched without `--enable-priority-scheduling`, so the code is safe in both modes.
@@ -424,8 +435,10 @@ python -m pytest tests/test_inference.py -m integration -v
 
 1. ~~**Async concurrent task processing**~~ ✅ **Done** — `asyncio.create_task` per accepted task; `process_messages()` uses `asyncio.gather` for intra-task message parallelism
 2. ~~**Contestant-side priority queue**~~ ✅ **Done** — `asyncio.PriorityQueue` dispatches highest `w_sla × w_task` tasks first; SGLang receives `priority` field per request
-3. ~~**Sliding window latency tracker**~~ ✅ **Done** — `LatencyTracker` feeds `should_accept()` to reject tasks whose historical latency already violates SLA
+3. ~~**Dynamic EWMA latency scheduler**~~ ✅ **Done** — per-task-type EWMA (α=0.3) + load-ratio queuing factor replaces static thresholds; probe mechanism prevents deadlock
 4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy fcfs --enable-priority-scheduling --chunked-prefill-size 4096`
-5. ~~**Terminal dashboard**~~ ✅ **Done** — `rich.live.Live` dashboard in `dashboard.py`: score+rate, task stats, latency P95/hit%, SGLang throughput
-6. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
-7. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
+5. ~~**Terminal dashboard**~~ ✅ **Done** — `rich.live.Live` dashboard in `dashboard.py`: score+rate, task stats, latency P95/hit%, task throughput
+6. ~~**logprob API fix**~~ ✅ **Done** — replaced invalid `input_token_logprobs:True` with `logprob_start_len:0`; loglikelihood now returns real values
+7. ~~**Mock task pool expansion**~~ ✅ **Done** — 24 tasks (8 SLA × 3 types), each SLA bound to one task of each type; covers Glorious/Supreme
+8. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
+9. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
