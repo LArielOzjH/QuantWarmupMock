@@ -121,7 +121,8 @@ class SGLangClient:
         resp.raise_for_status()
         data = resp.json()
 
-        token_logprobs = data.get("input_token_logprobs", [])
+        meta = data.get("meta_info") or data
+        token_logprobs = meta.get("input_token_logprobs", [])
         if not token_logprobs:
             log.warning("SGLang returned empty input_token_logprobs, returning -100.0")
             return -100.0
@@ -149,8 +150,10 @@ class SGLangClient:
         resp.raise_for_status()
         data = resp.json()
 
-        token_logprobs = data.get("input_token_logprobs", [])
+        meta = data.get("meta_info") or data
+        token_logprobs = meta.get("input_token_logprobs", [])
         if not token_logprobs:
+            log.warning("SGLang returned empty input_token_logprobs for rolling, returning -100.0")
             return -100.0
 
         # 跳过第一个 token（无前文，无 logprob 意义）
