@@ -22,15 +22,20 @@ import logging
 import os
 import time
 
+from rich.logging import RichHandler
+
 from contestant.client import PlatformClient
 from contestant.config_loader import load_config
-from contestant.dashboard import DashboardState, run_dashboard
+from contestant.dashboard import DashboardState, get_console, run_dashboard
 from contestant.inference import SGLangClient
 from contestant.scheduler import Scheduler, SLA_TTFT
+from contestant.visualizer import save_charts
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=get_console(), show_path=False)],
 )
 log = logging.getLogger(__name__)
 
@@ -162,8 +167,9 @@ async def main() -> None:
 
     await platform.register()
 
-    loop       = asyncio.get_event_loop()
-    deadline   = loop.time() + duration
+    loop          = asyncio.get_event_loop()
+    session_start = loop.time()
+    deadline      = session_start + duration
     task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
     stop_event = asyncio.Event()
     seq        = 0  # 打破相同优先级时的 FIFO 顺序（避免 tuple 比较报错）
@@ -233,6 +239,8 @@ async def main() -> None:
             await asyncio.gather(*pending, return_exceptions=True)
         await inference.close()
         await platform.close()
+        charts_dir = save_charts(dash_state, scheduler, session_start)
+        log.info(f"Charts saved to {charts_dir}")
         log.info("Session ended.")
 
 

@@ -5,7 +5,7 @@
   - 实时得分 & 增速
   - 任务统计（接受/拒绝/in-flight，按 SLA 分类）
   - 延迟分布（avg / P95 / SLA达标率，按 task_type × SLA）
-  - SGLang 吞吐（从 /metrics Prometheus 端点拉取）
+  - 每秒完成任务数
 """
 import asyncio
 import collections
@@ -18,6 +18,15 @@ from rich import box
 from rich.columns import Columns
 from rich.console import Console
 from rich.layout import Layout
+
+# 模块级共享 Console，供 main.py 的 RichHandler 使用，
+# 保证 logging 输出和 Live 面板走同一个渲染通道，避免重复打印。
+_console = Console()
+
+
+def get_console() -> Console:
+    """返回仪表盘使用的共享 Console 实例。"""
+    return _console
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
@@ -186,11 +195,10 @@ async def run_dashboard(
     stop_event: asyncio.Event,
 ) -> None:
     """后台协程：轮询得分 + SGLang 指标，驱动 rich Live 刷新。"""
-    console = Console()
     async with httpx.AsyncClient() as client:
         with Live(
             _render(state, scheduler),
-            console=console,
+            console=_console,
             refresh_per_second=2,
             screen=False,
             vertical_overflow="visible",
