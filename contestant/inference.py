@@ -213,7 +213,7 @@ class SGLangClient:
         """
         try:
             resp = await self._client.get(
-                f"{self.base_url}/get_server_info", timeout=0.5
+                f"{self.base_url}/server_info", timeout=0.5
             )
             return resp.json() if resp.status_code == 200 else {}
         except Exception:

@@ -162,7 +162,7 @@ async def main() -> None:
 
     platform   = PlatformClient(cfg.platform_url, TOKEN, TEAM_NAME)
     inference  = SGLangClient(SGLANG_URL, cfg.model_name, cfg.model_path)
-    scheduler  = Scheduler(max_concurrent=8)
+    scheduler  = Scheduler(max_concurrent=24)
     dash_state = DashboardState()
 
     await platform.register()
