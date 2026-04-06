@@ -8,20 +8,20 @@ from typing import Optional
 # 题库：8 SLA × 3 类型 = 24 道题
 #
 # 设计原则：
-# - 任务内容难度随 SLA 递增（Bronze 最简单，Supreme 最难）
-# - SLA 的挑战来自截止时间（Bronze=10s 宽松，Supreme=0.5s 极紧），而非任务简单化
-# - 所有 generate_until 统一 max_gen_toks=64，保证延迟特征一致（约 0.4-0.6s）
-# - loglikelihood 四选一，难度递增（Bronze 常识，Supreme 专业知识）
-# - loglikelihood_rolling prompt 长度/复杂度随 SLA 递增
+# - 所有 SLA 级别的任务内容难度相近（SLA 的挑战来自截止时间，而非题目难度）
+# - Bronze=10s 宽松 → Supreme=0.5s 极紧，题目本身都是简单的事实类问题
+# - generate_until 统一 max_gen_toks=32，期望输出为一个词或简短句子
+# - loglikelihood 四选一常识题，各 SLA 难度相当
+# - loglikelihood_rolling prompt 长度相近（约 15-25 词）
 # ---------------------------------------------------------------------------
 PROMPT_POOL = [
-    # ── Bronze（10s SLA）── 基础常识 ─────────────────────────────────────────
+    # ── Bronze（10s SLA）─────────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Bronze",
-        "prompt": "Question: What is 2 + 3?\nAnswer:",
+        "prompt": "Question: What is the capital of Japan?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
@@ -32,39 +32,36 @@ PROMPT_POOL = [
     {
         "type": "loglikelihood_rolling",
         "sla":  "Bronze",
-        "prompt": "The sun rises in the east.",
+        "prompt": "The sun rises in the east and sets in the west each day.",
     },
 
-    # ── Silver（8s SLA）── 基础应用 ───────────────────────────────────────────
+    # ── Silver（8s SLA）───────────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Silver",
-        "prompt": "Question: A store sells apples for $2 each. How much do 5 apples cost?\nAnswer:",
+        "prompt": "Question: What is 15 minus 7?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
         "sla":  "Silver",
-        "prompt": "The chemical symbol for water is",
+        "prompt": "The chemical formula for water is",
         "choices": [" H2O", " CO2", " NaCl", " O2"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Silver",
-        "prompt": "Water freezes at zero degrees Celsius and boils at one hundred degrees Celsius.",
+        "prompt": "Water freezes at zero degrees Celsius under normal atmospheric pressure.",
     },
 
-    # ── Gold（6s SLA）── 多步计算 ─────────────────────────────────────────────
+    # ── Gold（6s SLA）────────────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Gold",
-        "prompt": (
-            "Question: A train travels at 60 mph for 2 hours, then at 80 mph for 1 hour. "
-            "What is the total distance traveled?\nAnswer:"
-        ),
+        "prompt": "Question: What gas do plants absorb during photosynthesis?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
@@ -75,72 +72,56 @@ PROMPT_POOL = [
     {
         "type": "loglikelihood_rolling",
         "sla":  "Gold",
-        "prompt": (
-            "The mitochondria is the powerhouse of the cell, producing ATP through "
-            "cellular respiration."
-        ),
+        "prompt": "The Earth completes one full orbit around the sun every three hundred and sixty-five days.",
     },
 
-    # ── Platinum（4s SLA）── 代数推理 ─────────────────────────────────────────
+    # ── Platinum（4s SLA）────────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Platinum",
-        "prompt": "Question: If 3x + 7 = 22, what is the value of x?\nAnswer:",
+        "prompt": "Question: How many sides does a hexagon have?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
         "sla":  "Platinum",
-        "prompt": "Which scientist developed the theory of general relativity?",
-        "choices": [" Einstein", " Newton", " Curie", " Tesla"],
+        "prompt": "Light from the sun takes approximately how many minutes to reach Earth?",
+        "choices": [" 8", " 4", " 15", " 30"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Platinum",
-        "prompt": (
-            "In mathematics, the Pythagorean theorem states that in a right triangle, "
-            "the square of the hypotenuse equals the sum of the squares of the other two sides."
-        ),
+        "prompt": "The human heart pumps blood throughout the body to deliver oxygen to all cells.",
     },
 
-    # ── Diamond（2s SLA）── 几何/综合推理 ────────────────────────────────────
+    # ── Diamond（2s SLA）─────────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Diamond",
-        "prompt": (
-            "Question: A rectangle has a length of 12 cm and a diagonal of 13 cm. "
-            "What is its area?\nAnswer:"
-        ),
+        "prompt": "Question: What is the boiling point of water in degrees Celsius?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
         "sla":  "Diamond",
-        "prompt": "The process by which plants convert sunlight into chemical energy is called",
+        "prompt": "The process by which plants convert sunlight into food is called",
         "choices": [" photosynthesis", " respiration", " fermentation", " osmosis"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Diamond",
-        "prompt": (
-            "Machine learning is a subset of artificial intelligence that enables systems "
-            "to learn and improve from experience without being explicitly programmed."
-        ),
+        "prompt": "Gravity is the force that causes objects to fall toward the center of the Earth.",
     },
 
-    # ── Stellar（1.5s SLA）── 逻辑推理 ───────────────────────────────────────
+    # ── Stellar（1.5s SLA）───────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Stellar",
-        "prompt": (
-            "Question: A snail climbs 3 meters up a pole during the day and slides down "
-            "2 meters at night. The pole is 10 meters tall. On which day does the snail "
-            "first reach the top?\nAnswer:"
-        ),
+        "prompt": "Question: What planet is closest to the sun?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
@@ -151,23 +132,16 @@ PROMPT_POOL = [
     {
         "type": "loglikelihood_rolling",
         "sla":  "Stellar",
-        "prompt": (
-            "The theory of evolution by natural selection, first formulated by Charles Darwin, "
-            "describes how species change over time through the mechanism of heritable variation "
-            "and differential reproductive success."
-        ),
+        "prompt": "The periodic table organizes chemical elements by their atomic number and properties.",
     },
 
-    # ── Glorious（0.8s SLA）── 较难推理 ──────────────────────────────────────
+    # ── Glorious（0.8s SLA）──────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Glorious",
-        "prompt": (
-            "Question: You have a 3-liter jug and a 5-liter jug with no markings. "
-            "How do you measure exactly 4 liters of water?\nAnswer:"
-        ),
+        "prompt": "Question: What is the square root of 64?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
@@ -178,39 +152,27 @@ PROMPT_POOL = [
     {
         "type": "loglikelihood_rolling",
         "sla":  "Glorious",
-        "prompt": (
-            "Quantum mechanics is a fundamental theory in physics that provides a description "
-            "of the physical properties of nature at the scale of atoms and subatomic particles, "
-            "where classical mechanics ceases to be accurate."
-        ),
+        "prompt": "Photosynthesis converts sunlight and carbon dioxide into glucose and oxygen in plants.",
     },
 
-    # ── Supreme（0.5s SLA）── 最难推理 ────────────────────────────────────────
+    # ── Supreme（0.5s SLA）───────────────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Supreme",
-        "prompt": (
-            "Question: There are 3 boxes: one has only apples, one has only oranges, one has "
-            "both. All labels are wrong. You may pick one fruit from one box. How many picks "
-            "do you need to correctly label all boxes?\nAnswer:"
-        ),
+        "prompt": "Question: What is the chemical symbol for gold?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 64,
+        "max_gen_toks": 32,
     },
     {
         "type": "loglikelihood",
         "sla":  "Supreme",
-        "prompt": "Which element has the highest electronegativity on the periodic table?",
-        "choices": [" Fluorine", " Oxygen", " Nitrogen", " Chlorine"],
+        "prompt": "Which element has atomic number 1?",
+        "choices": [" Hydrogen", " Helium", " Lithium", " Carbon"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Supreme",
-        "prompt": (
-            "Gödel's incompleteness theorems demonstrate that within any sufficiently powerful "
-            "formal axiomatic system, there exist statements that are true but cannot be proven "
-            "within the system, fundamentally limiting the scope of formal proof."
-        ),
+        "prompt": "Neurons transmit electrical signals throughout the nervous system to coordinate body functions.",
     },
 ]
 
@@ -310,3 +272,4 @@ def generate_task(task_id: int) -> FullTask:
         eval_sampling_param=sp_name,
     )
     return FullTask(overview=overview, messages=messages)
+

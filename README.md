@@ -66,7 +66,7 @@ quant/
 │   ├── config.py                # SLA levels, sampling params, task weights
 │   ├── mock_config.json         # Local config (localhost URLs, model paths)
 │   ├── scorer.py                # calc_reward() / calc_penalty()
-│   ├── task_generator.py        # 24-task pool (8 SLA × 3 types); each task has fixed SLA binding
+│   ├── task_generator.py        # 24-task pool (8 SLA × 3 types); uniform difficulty, SLA challenge is timing only
 │   └── server.py                # FastAPI: /register /query /ask /submit /scores /status
 │
 ├── contestant/                  # Submission package
@@ -117,23 +117,22 @@ Penalty = −2 × w_task × w_sla × w_sp          (if not submitted within 600 
 **Condition 2 — Dynamic latency estimate**:
 
 ```
-estimated_latency = ewma[task_type] × (1 + load_ratio)
+estimated_latency = ewma[(task_type, sla)] × (1 + load_ratio)
 accept  ←→  estimated_latency < sla_ttft
 ```
 
-- `ewma[task_type]` — per-task-type Exponential Weighted Moving Average (α=0.3) of recent ask→submit latency. Tracked at the task-type level (3 buckets) rather than per `(task_type, sla)` (24 sparse buckets) for faster convergence.
+- `ewma[(task_type, sla)]` — per-(task_type, sla) Exponential Weighted Moving Average (α=0.3) of recent ask→submit latency. 24 independent buckets (8 SLA × 3 types) prevent cross-contamination — a slow Bronze task's EWMA never inflates the estimate for a Supreme task.
 - `load_ratio` — acts as a queuing factor: at high load each new task waits longer for a GPU slot, so the estimate naturally increases.
 - **Cold start** (no history yet): check skipped, all tasks accepted up to the cap.
+- **Probe mechanism**: after `PROBE_THRESHOLD=8` consecutive rejections for the same (task_type, sla) key, one task is force-accepted to refresh the EWMA and prevent permanent starvation.
 
-Examples with `ewma["generate_until"] = 0.65 s`:
+Examples with `ewma[("generate_until", "Glorious")] = 0.65 s`:
 
 | SLA | TTFT | load=0 estimate | load=0.75 estimate | Decision |
 |-----|------|------------------|--------------------|----------|
 | Glorious | 0.8 s | 0.65 × 1.0 = 0.65 ✓ | 0.65 × 1.75 = 1.14 ✗ | accept / reject |
 | Supreme | 0.5 s | 0.65 > 0.5 ✗ | — | reject |
 | loglikelihood Supreme | 0.5 s | 0.08 × 1.0 = 0.08 ✓ | 0.08 × 1.75 = 0.14 ✓ | always accept |
-
-**Probe mechanism (deadlock prevention)**: if latency-based rejection fires continuously for `PROBE_THRESHOLD=8` consecutive queries of the same `(task_type, sla)`, one task is force-accepted to gather fresh latency data, preventing permanent starvation.
 
 ---
 
@@ -439,6 +438,6 @@ python -m pytest tests/test_inference.py -m integration -v
 4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy fcfs --enable-priority-scheduling --chunked-prefill-size 4096`
 5. ~~**Terminal dashboard**~~ ✅ **Done** — `rich.live.Live` dashboard in `dashboard.py`: score+rate, task stats, latency P95/hit%, task throughput
 6. ~~**logprob API fix**~~ ✅ **Done** — replaced invalid `input_token_logprobs:True` with `logprob_start_len:0`; loglikelihood now returns real values
-7. ~~**Mock task pool expansion**~~ ✅ **Done** — 24 tasks (8 SLA × 3 types), each SLA bound to one task of each type; covers Glorious/Supreme
+7. ~~**Mock task pool expansion & redesign**~~ ✅ **Done** — 24 tasks (8 SLA × 3 types); uniform difficulty across SLA levels (SLA challenge is timing only, max_gen_toks=32 for all generate_until)
 8. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
 9. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
