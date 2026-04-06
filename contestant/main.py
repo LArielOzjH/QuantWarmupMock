@@ -183,6 +183,12 @@ async def main() -> None:
 
     try:
         while loop.time() < deadline:
+            # 0. 每 10 次循环刷新一次 SGLang 内部队列信息（辅助展示 + 调度参考）
+            if seq % 10 == 0:
+                info = await inference.server_info()
+                if info:
+                    scheduler.update_sglang_queue(info.get("num_waiting_reqs", 0))
+
             # 1. 拉取任务概要
             overview = await platform.query()
             if overview is None:

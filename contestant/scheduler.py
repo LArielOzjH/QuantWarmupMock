@@ -16,45 +16,46 @@ SLA_TTFT: dict[str, float] = {
 
 
 class LatencyTracker:
-    """双层延迟追踪器。
+    """per-(task_type, sla) 双用途延迟追踪器。
 
-    - task_type 级 EWMA：用于 should_accept() 决策（3 个桶，数据充足，收敛快）
-    - (task_type, sla) 级滑动窗口：用于 dashboard / visualizer 展示
+    决策（should_accept）和展示（dashboard/visualizer）均使用 (task_type, sla) 粒度：
+    - EWMA：alpha=0.3，用于 should_accept() 的估算，单样本即有效
+    - 滑动窗口样本：用于 P95 / hit-rate / avg 展示
 
-    EWMA 公式：ewma = alpha × new + (1−alpha) × old
-    alpha=0.3 意味着单条新样本使均值向新值移动约 30%，恢复速度远快于 deque 均值。
+    为何改为 (task_type, sla) 而非 task_type：
+    generate_until 不同 SLA 的 prompt 复杂度/长度不同，延迟差异显著。
+    混合 EWMA 会导致 Bronze gen（慢）污染 Diamond/Supreme gen（快），
+    造成后者被误判为慢任务而大量误拒。
     """
 
     ALPHA = 0.3
 
     def __init__(self, window: int = 50):
         self._window = window
-        # task_type → EWMA（决策用）
-        self._ewma: dict[str, float] = {}
-        # (task_type, sla) → deque of samples（dashboard / P95 / hit-rate 用）
+        # (task_type, sla) → EWMA（决策用）
+        self._ewma: dict[tuple, float] = {}
+        # (task_type, sla) → deque of samples（P95 / hit-rate / avg 展示用）
         self._sla_samples: dict[tuple, deque] = {}
 
     def record(self, task_type: str, sla: str, elapsed: float) -> None:
-        """记录一次任务完成延迟。"""
-        # EWMA 更新（task_type 级，不区分 SLA）
-        if task_type not in self._ewma:
-            self._ewma[task_type] = elapsed
-        else:
-            self._ewma[task_type] = (
-                self.ALPHA * elapsed + (1 - self.ALPHA) * self._ewma[task_type]
-            )
-        # (task_type, sla) 级样本保留
+        """记录一次任务完成延迟，同时更新 EWMA 和样本窗口。"""
         key = (task_type, sla)
+        if key not in self._ewma:
+            self._ewma[key] = elapsed
+        else:
+            self._ewma[key] = (
+                self.ALPHA * elapsed + (1 - self.ALPHA) * self._ewma[key]
+            )
         if key not in self._sla_samples:
             self._sla_samples[key] = deque(maxlen=self._window)
         self._sla_samples[key].append(elapsed)
 
-    def ewma_latency(self, task_type: str) -> float | None:
-        """返回 task_type 的 EWMA 均值；冷启动返回 None。"""
-        return self._ewma.get(task_type)
+    def ewma_latency(self, task_type: str, sla: str) -> float | None:
+        """返回 (task_type, sla) 的 EWMA 均值；冷启动返回 None。"""
+        return self._ewma.get((task_type, sla))
 
     def avg_latency(self, task_type: str, sla: str) -> float | None:
-        """返回 (task_type, sla) 的窗口均值（dashboard 展示用）。"""
+        """返回窗口均值（dashboard 展示用）。"""
         d = self._sla_samples.get((task_type, sla))
         if not d:
             return None
@@ -86,7 +87,7 @@ class Scheduler:
     """动态延迟感知调度器。
 
     接单决策公式：
-        estimated = ewma[task_type] × (1 + load_ratio)
+        estimated = ewma[(task_type, sla)] × (1 + load_ratio)
         accept  ←→  estimated < sla_ttft
 
     load_ratio 充当排队因子：当 active_count 增多时，每个新任务平均要多等待
@@ -104,6 +105,7 @@ class Scheduler:
         self._active: set[int] = set()
         self.latency = LatencyTracker(window=50)
         self._consec_rejects: dict[tuple, int] = {}  # (task_type, sla) → 连续延迟拒绝次数
+        self._sglang_waiting: int = 0  # SGLang 内部等待队列深度（实时信息，辅助展示）
 
     @property
     def active_count(self) -> int:
@@ -113,12 +115,16 @@ class Scheduler:
     def load_ratio(self) -> float:
         return self.active_count / self.max_concurrent
 
+    def update_sglang_queue(self, waiting: int) -> None:
+        """更新 SGLang 内部等待队列深度（dashboard 展示用）。"""
+        self._sglang_waiting = waiting
+
     def should_accept(self, overview: dict) -> bool:
         """动态估算完成时间，决定是否接单。
 
         拒绝条件：
         1. 硬上限：active_count >= max_concurrent（系统已满载）
-        2. 延迟估算：ewma[task_type] × (1 + load_ratio) >= sla_ttft
+        2. 延迟估算：ewma[(task_type, sla)] × (1 + load_ratio) >= sla_ttft
            且连续拒绝次数未达到探针阈值
 
         返回 True 表示接单，False 表示拒绝。
@@ -132,7 +138,7 @@ class Scheduler:
             return False
 
         # 2. 动态延迟估算（冷启动 ewma=None 时跳过）
-        ewma = self.latency.ewma_latency(task_type)
+        ewma = self.latency.ewma_latency(task_type, sla)
         if ewma is not None:
             estimated = ewma * (1.0 + self.load_ratio)
             sla_limit = SLA_TTFT.get(sla, 600.0)

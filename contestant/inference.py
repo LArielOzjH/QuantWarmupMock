@@ -206,6 +206,19 @@ class SGLangClient:
         except Exception:
             return False
 
+    async def server_info(self) -> dict:
+        """获取 SGLang 运行时队列状态（num_waiting_reqs, num_running_reqs 等）。
+
+        返回空 dict 表示查询失败（服务不支持或超时），调用方应容忍。
+        """
+        try:
+            resp = await self._client.get(
+                f"{self.base_url}/get_server_info", timeout=0.5
+            )
+            return resp.json() if resp.status_code == 200 else {}
+        except Exception:
+            return {}
+
     async def close(self):
         await self._client.aclose()
 

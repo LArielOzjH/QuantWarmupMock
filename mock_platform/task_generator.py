@@ -6,21 +6,22 @@ from typing import Optional
 
 # ---------------------------------------------------------------------------
 # 题库：8 SLA × 3 类型 = 24 道题
-# 每道题绑定固定 SLA，保证每个 SLA 等级都能被测试到（含 Glorious/Supreme）。
-# max_gen_toks 随 SLA 升高而减小，确保高 SLA 任务在时限内可完成。
+#
+# 设计原则：
+# - 任务内容难度随 SLA 递增（Bronze 最简单，Supreme 最难）
+# - SLA 的挑战来自截止时间（Bronze=10s 宽松，Supreme=0.5s 极紧），而非任务简单化
+# - 所有 generate_until 统一 max_gen_toks=64，保证延迟特征一致（约 0.4-0.6s）
+# - loglikelihood 四选一，难度递增（Bronze 常识，Supreme 专业知识）
+# - loglikelihood_rolling prompt 长度/复杂度随 SLA 递增
 # ---------------------------------------------------------------------------
 PROMPT_POOL = [
-    # ── Bronze（10s SLA）── 长任务，答案可以详细 ──────────────────────────────
+    # ── Bronze（10s SLA）── 基础常识 ─────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Bronze",
-        "prompt": (
-            "Question: Natalia sold clips to 48 of her friends in April, "
-            "and then she sold half as many clips in May. "
-            "How many clips did Natalia sell altogether in April and May?\nAnswer:"
-        ),
+        "prompt": "Question: What is 2 + 3?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 256,
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
@@ -31,162 +32,185 @@ PROMPT_POOL = [
     {
         "type": "loglikelihood_rolling",
         "sla":  "Bronze",
-        "prompt": (
-            "The quick brown fox jumps over the lazy dog. "
-            "This classic sentence is often used to test typefaces because it "
-            "contains every letter of the English alphabet at least once."
-        ),
+        "prompt": "The sun rises in the east.",
     },
 
-    # ── Silver（8s SLA）──────────────────────────────────────────────────────
+    # ── Silver（8s SLA）── 基础应用 ───────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Silver",
-        "prompt": (
-            "Question: A store had 120 apples. They sold 45 apples on Monday "
-            "and received a new shipment of 30 apples on Tuesday. "
-            "How many apples does the store have now?\nAnswer:"
-        ),
+        "prompt": "Question: A store sells apples for $2 each. How much do 5 apples cost?\nAnswer:",
         "until": ["\n\n"],
-        "max_gen_toks": 128,
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
         "sla":  "Silver",
-        "prompt": "Which programming language is primarily used in data science?",
-        "choices": [" Python", " Assembly", " COBOL", " Fortran"],
-    },
-    {
-        "type": "loglikelihood_rolling",
-        "sla":  "Silver",
-        "prompt": (
-            "Once upon a time in a land far away, there lived a wise old wizard "
-            "who knew the secrets of the universe and shared them only with those "
-            "who were pure of heart."
-        ),
-    },
-
-    # ── Gold（6s SLA）───────────────────────────────────────────────────────
-    {
-        "type": "generate_until",
-        "sla":  "Gold",
-        "prompt": "Question: What is 2+2?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 16,
-    },
-    {
-        "type": "loglikelihood",
-        "sla":  "Gold",
         "prompt": "The chemical symbol for water is",
         "choices": [" H2O", " CO2", " NaCl", " O2"],
     },
     {
         "type": "loglikelihood_rolling",
-        "sla":  "Gold",
-        "prompt": "The mitochondria is the powerhouse of the cell.",
+        "sla":  "Silver",
+        "prompt": "Water freezes at zero degrees Celsius and boils at one hundred degrees Celsius.",
     },
 
-    # ── Platinum（4s SLA）───────────────────────────────────────────────────
+    # ── Gold（6s SLA）── 多步计算 ─────────────────────────────────────────────
     {
         "type": "generate_until",
-        "sla":  "Platinum",
-        "prompt": "Question: Which planet is closest to the Sun?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 32,
+        "sla":  "Gold",
+        "prompt": (
+            "Question: A train travels at 60 mph for 2 hours, then at 80 mph for 1 hour. "
+            "What is the total distance traveled?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
-        "sla":  "Platinum",
+        "sla":  "Gold",
         "prompt": "The largest planet in our solar system is",
         "choices": [" Jupiter", " Saturn", " Mars", " Neptune"],
     },
     {
         "type": "loglikelihood_rolling",
-        "sla":  "Platinum",
+        "sla":  "Gold",
         "prompt": (
-            "In mathematics, the Pythagorean theorem states that in a right triangle "
-            "the square of the hypotenuse equals the sum of the squares of the other two sides."
+            "The mitochondria is the powerhouse of the cell, producing ATP through "
+            "cellular respiration."
         ),
     },
 
-    # ── Diamond（2s SLA）────────────────────────────────────────────────────
+    # ── Platinum（4s SLA）── 代数推理 ─────────────────────────────────────────
     {
         "type": "generate_until",
-        "sla":  "Diamond",
-        "prompt": "Question: What is the boiling point of water in Celsius?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 16,
+        "sla":  "Platinum",
+        "prompt": "Question: If 3x + 7 = 22, what is the value of x?\nAnswer:",
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
-        "sla":  "Diamond",
+        "sla":  "Platinum",
         "prompt": "Which scientist developed the theory of general relativity?",
         "choices": [" Einstein", " Newton", " Curie", " Tesla"],
     },
     {
         "type": "loglikelihood_rolling",
-        "sla":  "Diamond",
-        "prompt": "E equals mc squared is Einstein's famous mass-energy equivalence formula.",
+        "sla":  "Platinum",
+        "prompt": (
+            "In mathematics, the Pythagorean theorem states that in a right triangle, "
+            "the square of the hypotenuse equals the sum of the squares of the other two sides."
+        ),
     },
 
-    # ── Stellar（1.5s SLA）──────────────────────────────────────────────────
+    # ── Diamond（2s SLA）── 几何/综合推理 ────────────────────────────────────
     {
         "type": "generate_until",
-        "sla":  "Stellar",
-        "prompt": "Question: How many days are in a week?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 8,
+        "sla":  "Diamond",
+        "prompt": (
+            "Question: A rectangle has a length of 12 cm and a diagonal of 13 cm. "
+            "What is its area?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
-        "sla":  "Stellar",
-        "prompt": "The process by which plants convert sunlight into energy is called",
+        "sla":  "Diamond",
+        "prompt": "The process by which plants convert sunlight into chemical energy is called",
         "choices": [" photosynthesis", " respiration", " fermentation", " osmosis"],
     },
     {
         "type": "loglikelihood_rolling",
+        "sla":  "Diamond",
+        "prompt": (
+            "Machine learning is a subset of artificial intelligence that enables systems "
+            "to learn and improve from experience without being explicitly programmed."
+        ),
+    },
+
+    # ── Stellar（1.5s SLA）── 逻辑推理 ───────────────────────────────────────
+    {
+        "type": "generate_until",
         "sla":  "Stellar",
-        "prompt": "Water freezes at zero degrees Celsius.",
+        "prompt": (
+            "Question: A snail climbs 3 meters up a pole during the day and slides down "
+            "2 meters at night. The pole is 10 meters tall. On which day does the snail "
+            "first reach the top?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
+    },
+    {
+        "type": "loglikelihood",
+        "sla":  "Stellar",
+        "prompt": "In which year did the First World War begin?",
+        "choices": [" 1914", " 1918", " 1939", " 1905"],
+    },
+    {
+        "type": "loglikelihood_rolling",
+        "sla":  "Stellar",
+        "prompt": (
+            "The theory of evolution by natural selection, first formulated by Charles Darwin, "
+            "describes how species change over time through the mechanism of heritable variation "
+            "and differential reproductive success."
+        ),
     },
 
-    # ── Glorious（0.8s SLA）─────────────────────────────────────────────────
+    # ── Glorious（0.8s SLA）── 较难推理 ──────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Glorious",
-        "prompt": "Question: What color is the sky on a clear day?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 8,
+        "prompt": (
+            "Question: You have a 3-liter jug and a 5-liter jug with no markings. "
+            "How do you measure exactly 4 liters of water?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
         "sla":  "Glorious",
-        "prompt": "The speed of light in a vacuum is approximately",
-        "choices": [" 3×10^8 m/s", " 3×10^6 m/s", " 3×10^10 m/s", " 3×10^4 m/s"],
+        "prompt": "The human body has approximately how many bones?",
+        "choices": [" 206", " 156", " 256", " 106"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Glorious",
-        "prompt": "The sun rises in the east.",
+        "prompt": (
+            "Quantum mechanics is a fundamental theory in physics that provides a description "
+            "of the physical properties of nature at the scale of atoms and subatomic particles, "
+            "where classical mechanics ceases to be accurate."
+        ),
     },
 
-    # ── Supreme（0.5s SLA）──────────────────────────────────────────────────
+    # ── Supreme（0.5s SLA）── 最难推理 ────────────────────────────────────────
     {
         "type": "generate_until",
         "sla":  "Supreme",
-        "prompt": "Question: What is 1+1?\nAnswer:",
-        "until": ["\n"],
-        "max_gen_toks": 4,
+        "prompt": (
+            "Question: There are 3 boxes: one has only apples, one has only oranges, one has "
+            "both. All labels are wrong. You may pick one fruit from one box. How many picks "
+            "do you need to correctly label all boxes?\nAnswer:"
+        ),
+        "until": ["\n\n"],
+        "max_gen_toks": 64,
     },
     {
         "type": "loglikelihood",
         "sla":  "Supreme",
-        "prompt": "Water boils at",
-        "choices": [" 100°C", " 0°C", " 50°C", " 200°C"],
+        "prompt": "Which element has the highest electronegativity on the periodic table?",
+        "choices": [" Fluorine", " Oxygen", " Nitrogen", " Chlorine"],
     },
     {
         "type": "loglikelihood_rolling",
         "sla":  "Supreme",
-        "prompt": "Two plus two equals four.",
+        "prompt": (
+            "Gödel's incompleteness theorems demonstrate that within any sufficiently powerful "
+            "formal axiomatic system, there exist statements that are true but cannot be proven "
+            "within the system, fundamentally limiting the scope of formal proof."
+        ),
     },
 ]
 
