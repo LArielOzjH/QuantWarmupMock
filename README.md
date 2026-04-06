@@ -75,6 +75,7 @@ quant/
 │   ├── inference.py             # SGLangClient: async, process_messages() with asyncio.gather + priority
 │   ├── client.py                # PlatformClient: async, wraps the 4 platform HTTP endpoints
 │   ├── main.py                  # Async main loop: poller → PriorityQueue → dispatcher → workers
+│   ├── dashboard.py             # Rich terminal dashboard: real-time score / latency / task stats
 │   ├── run.sh                   # Competition submission entrypoint (starts SGLang + main)
 │   ├── setup.sh                 # One-time env setup (venv + pip + sglang editable)
 │   └── requirements.txt         # Python deps (sglang installed separately via setup.sh)
@@ -372,14 +373,15 @@ python -m sglang.launch_server \
 # Terminal 2: start mock platform
 python -m uvicorn mock_platform.server:app --host 0.0.0.0 --port 8003
 
-# Terminal 3: run contestant client (60 s session)
+# Terminal 3: run contestant client with live dashboard (60 s session)
 CONFIG_PATH=mock_platform/mock_config.json \
 TEAM_TOKEN=mytoken \
 SGLANG_URL=http://localhost:30000 \
 DURATION_OVERRIDE=60 \
 python -m contestant.main
+# A rich terminal dashboard refreshes every 0.5s showing score, latency, task stats
 
-# Check score
+# Check score (also shown in dashboard)
 curl http://localhost:8003/scores
 ```
 
@@ -424,5 +426,6 @@ python -m pytest tests/test_inference.py -m integration -v
 2. ~~**Contestant-side priority queue**~~ ✅ **Done** — `asyncio.PriorityQueue` dispatches highest `w_sla × w_task` tasks first; SGLang receives `priority` field per request
 3. ~~**Sliding window latency tracker**~~ ✅ **Done** — `LatencyTracker` feeds `should_accept()` to reject tasks whose historical latency already violates SLA
 4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy fcfs --enable-priority-scheduling --chunked-prefill-size 4096`
-5. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
-6. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
+5. ~~**Terminal dashboard**~~ ✅ **Done** — `rich.live.Live` dashboard in `dashboard.py`: score+rate, task stats, latency P95/hit%, SGLang throughput
+6. **In-memory result cache** — deduplicate identical prompt+continuation pairs within a session
+7. **SGLang KV Cache eviction policy** — SLA-aware prefix eviction in `radix_cache.py`
