@@ -178,17 +178,11 @@ async def main() -> None:
         dispatcher(task_queue, platform, inference, scheduler, stop_event)
     )
     dashboard_task = asyncio.create_task(
-        run_dashboard(dash_state, scheduler, cfg.platform_url, stop_event)
+        run_dashboard(dash_state, scheduler, cfg.platform_url, stop_event, inference)
     )
 
     try:
         while loop.time() < deadline:
-            # 0. 每 10 次循环刷新一次 SGLang 内部队列信息（辅助展示 + 调度参考）
-            if seq % 10 == 0:
-                info = await inference.server_info()
-                if info:
-                    scheduler.update_sglang_queue(info.get("num_waiting_reqs", 0))
-
             # 1. 拉取任务概要
             overview = await platform.query()
             if overview is None:
@@ -199,7 +193,7 @@ async def main() -> None:
             if not scheduler.should_accept(overview):
                 async with dash_state._lock:
                     dash_state.rejected += 1
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0)  # 让出事件循环后立即重试，不额外等待
                 continue
 
             # 3. 接单，获取完整任务

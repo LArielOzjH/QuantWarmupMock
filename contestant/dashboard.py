@@ -193,8 +193,10 @@ async def run_dashboard(
     scheduler,
     platform_url: str,
     stop_event: asyncio.Event,
+    inference=None,
 ) -> None:
     """后台协程：轮询得分 + SGLang 指标，驱动 rich Live 刷新。"""
+    tick = 0
     async with httpx.AsyncClient() as client:
         with Live(
             _render(state, scheduler),
@@ -215,5 +217,15 @@ async def run_dashboard(
                 except Exception:
                     pass
 
+                # 每 4 次刷新（2s）更新一次 SGLang 队列深度
+                if tick % 4 == 0 and inference is not None:
+                    try:
+                        info = await inference.server_info()
+                        if info:
+                            scheduler.update_sglang_queue(info.get("num_waiting_reqs", 0))
+                    except Exception:
+                        pass
+
                 live.update(_render(state, scheduler))
                 await asyncio.sleep(0.5)
+                tick += 1

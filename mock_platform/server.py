@@ -46,11 +46,13 @@ _state: dict = {
 # ---------------------------------------------------------------------------
 async def _task_producer():
     while True:
-        if len(_state["available_tasks"]) < 10:
+        # 每次最多补充 5 道题，保持队列充盈（缓冲上限 30）
+        to_add = min(5, 30 - len(_state["available_tasks"]))
+        for _ in range(max(0, to_add)):
             task = generate_task(_state["task_counter"])
             _state["task_counter"] += 1
             _state["available_tasks"].append(task)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.05)  # 0.3s → 0.05s，~30 tasks/s 生成上限
 
 
 @asynccontextmanager
