@@ -55,6 +55,29 @@ class LatencyTracker:
             return None
         return sum(d) / len(d)
 
+    def p95_latency(self, task_type: str, sla: str) -> float | None:
+        """返回 P95 延迟；无数据时返回 None。"""
+        key = (task_type, sla)
+        d = self._data.get(key)
+        if not d:
+            return None
+        sorted_d = sorted(d)
+        idx = min(int(len(sorted_d) * 0.95), len(sorted_d) - 1)
+        return sorted_d[idx]
+
+    def sla_hit_rate(self, task_type: str, sla: str) -> float | None:
+        """返回 SLA 达标率 [0,1]；无数据时返回 None。"""
+        key = (task_type, sla)
+        d = self._data.get(key)
+        if not d:
+            return None
+        limit = SLA_TTFT.get(sla, 600.0)
+        return sum(1 for v in d if v <= limit) / len(d)
+
+    def all_keys(self) -> list[tuple]:
+        """返回所有有数据的 (task_type, sla) 键。"""
+        return list(self._data.keys())
+
 
 class Scheduler:
     """SLA 感知的任务接单调度器。

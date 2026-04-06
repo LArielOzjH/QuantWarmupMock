@@ -23,6 +23,7 @@ import os
 
 from contestant.client import PlatformClient
 from contestant.config_loader import load_config
+from contestant.dashboard import DashboardState, run_dashboard
 from contestant.inference import SGLangClient
 from contestant.scheduler import Scheduler, SLA_TTFT
 
@@ -68,6 +69,7 @@ async def handle_task(
     platform: PlatformClient,
     inference: SGLangClient,
     scheduler: Scheduler,
+    dash_state: DashboardState,
 ) -> None:
     """单个任务的完整生命周期：并发推理所有 messages → 提交结果。
 
@@ -92,11 +94,26 @@ async def handle_task(
                 f"submitting anyway to avoid -2× penalty"
             )
 
+        sla_hit = loop.time() <= deadline_time
         ok = await platform.submit(task_data["overview"], result_messages)
         log.info(f"Task {task_id} submitted: {'ok' if ok else 'FAIL'} elapsed={elapsed:.2f}s")
 
         # 上报延迟，供滑动窗口统计 → 影响后续 should_accept 决策
         scheduler.latency.record(task_type, sla, elapsed)
+
+        # 更新仪表盘
+        async with dash_state._lock:
+            dash_state.completed += 1
+            if not sla_hit:
+                dash_state.sla_missed += 1
+            dash_state.recent_tasks.append({
+                "task_id": task_id,
+                "sla": sla,
+                "task_type": task_type,
+                "elapsed": elapsed,
+                "ok": ok,
+                "sla_hit": sla_hit,
+            })
 
     except Exception as e:
         log.error(f"Task {task_id} error: {e}", exc_info=True)
@@ -121,11 +138,11 @@ async def dispatcher(
             item = await asyncio.wait_for(task_queue.get(), timeout=0.1)
         except asyncio.TimeoutError:
             continue
-        _, _seq, task_data, overview, deadline_time, sglang_priority = item
+        _, _seq, task_data, overview, deadline_time, sglang_priority, dash_state = item
         asyncio.create_task(
             handle_task(
                 task_data, overview, deadline_time, sglang_priority,
-                platform, inference, scheduler,
+                platform, inference, scheduler, dash_state,
             )
         )
         task_queue.task_done()
@@ -136,9 +153,10 @@ async def main() -> None:
     duration = int(DURATION_OVERRIDE) if DURATION_OVERRIDE else cfg.duration_s
     log.info(f"Config: platform={cfg.platform_url}, model={cfg.model_name}, duration={duration}s")
 
-    platform  = PlatformClient(cfg.platform_url, TOKEN, TEAM_NAME)
-    inference = SGLangClient(SGLANG_URL, cfg.model_name, cfg.model_path)
-    scheduler = Scheduler(max_concurrent=8)
+    platform   = PlatformClient(cfg.platform_url, TOKEN, TEAM_NAME)
+    inference  = SGLangClient(SGLANG_URL, cfg.model_name, cfg.model_path)
+    scheduler  = Scheduler(max_concurrent=8)
+    dash_state = DashboardState()
 
     await platform.register()
 
@@ -151,6 +169,9 @@ async def main() -> None:
     dispatch_task = asyncio.create_task(
         dispatcher(task_queue, platform, inference, scheduler, stop_event)
     )
+    dashboard_task = asyncio.create_task(
+        run_dashboard(dash_state, scheduler, cfg.platform_url, SGLANG_URL, stop_event)
+    )
 
     try:
         while loop.time() < deadline:
@@ -162,6 +183,8 @@ async def main() -> None:
 
             # 2. 调度决策：是否接单（负载阈值 + 延迟感知）
             if not scheduler.should_accept(overview):
+                async with dash_state._lock:
+                    dash_state.rejected += 1
                 await asyncio.sleep(0.05)
                 continue
 
@@ -177,6 +200,9 @@ async def main() -> None:
             priority      = _task_priority(overview)
 
             scheduler.mark_active(task_id)
+            async with dash_state._lock:
+                dash_state.accepted += 1
+                dash_state.sla_counts[sla] = dash_state.sla_counts.get(sla, 0) + 1
             log.info(
                 f"Task {task_id} accepted | SLA={sla} "
                 f"type={overview['eval_request_type']} "
@@ -187,17 +213,18 @@ async def main() -> None:
             # 4. 放入优先队列，dispatcher 协程会按优先级取出并派发
             seq += 1
             await task_queue.put(
-                (priority, seq, task_data, overview, deadline_time, sglang_prio)
+                (priority, seq, task_data, overview, deadline_time, sglang_prio, dash_state)
             )
 
     finally:
-        # 通知 dispatcher 停止，等待其排空队列
+        # 通知 dispatcher 和 dashboard 停止
         stop_event.set()
-        await dispatch_task
+        await asyncio.gather(dispatch_task, dashboard_task, return_exceptions=True)
         # 等待所有正在执行的推理任务完成
         pending = [
             t for t in asyncio.all_tasks()
-            if t is not asyncio.current_task() and t is not dispatch_task
+            if t is not asyncio.current_task()
+            and t not in (dispatch_task, dashboard_task)
         ]
         if pending:
             log.info(f"Waiting for {len(pending)} in-flight task(s)...")
