@@ -20,6 +20,7 @@
 import asyncio
 import logging
 import os
+import time
 
 from contestant.client import PlatformClient
 from contestant.config_loader import load_config
@@ -104,6 +105,7 @@ async def handle_task(
         # 更新仪表盘
         async with dash_state._lock:
             dash_state.completed += 1
+            dash_state.completed_ts.append(time.time())
             if not sla_hit:
                 dash_state.sla_missed += 1
             dash_state.recent_tasks.append({
@@ -170,7 +172,7 @@ async def main() -> None:
         dispatcher(task_queue, platform, inference, scheduler, stop_event)
     )
     dashboard_task = asyncio.create_task(
-        run_dashboard(dash_state, scheduler, cfg.platform_url, SGLANG_URL, stop_event)
+        run_dashboard(dash_state, scheduler, cfg.platform_url, stop_event)
     )
 
     try:

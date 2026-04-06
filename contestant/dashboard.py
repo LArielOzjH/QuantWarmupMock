@@ -54,11 +54,19 @@ class DashboardState:
     )
     # 每条格式: {task_id, sla, task_type, elapsed, ok, sla_hit}
 
-    # SGLang 指标
-    sglang_gen_throughput: float = 0.0
-    sglang_running_reqs: int = 0
+    # 任务吞吐（自计算：最近 10s 完成的任务数）
+    completed_ts: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=100)
+    )  # 每次完成时记录 timestamp
 
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _task_rate(state: DashboardState) -> float:
+    """最近 10s 完成的任务数/秒。"""
+    now = time.time()
+    recent = sum(1 for t in state.completed_ts if now - t <= 10.0)
+    return recent / 10.0
 
 
 def _score_rate(state: DashboardState) -> float:
@@ -90,10 +98,8 @@ def _render(state: DashboardState, scheduler) -> Layout:
     score_text = Text()
     score_text.append(f" {state.total_score:.2f}\n", style="bold green")
     score_text.append(f" {rate:+.2f}/s\n", style="cyan")
-    if state.sglang_gen_throughput > 0:
-        score_text.append(f" SGLang {state.sglang_gen_throughput:.0f} tok/s", style="dim")
-    else:
-        score_text.append(" SGLang --", style="dim")
+    task_rate = _task_rate(state)
+    score_text.append(f" {task_rate:.1f} tasks/s", style="dim")
     layout["score"].update(Panel(score_text, title="Score", box=box.ROUNDED))
 
     # ── 任务统计面板 ──────────────────────────────────────────
@@ -177,7 +183,6 @@ async def run_dashboard(
     state: DashboardState,
     scheduler,
     platform_url: str,
-    sglang_url: str,
     stop_event: asyncio.Event,
 ) -> None:
     """后台协程：轮询得分 + SGLang 指标，驱动 rich Live 刷新。"""
@@ -199,17 +204,6 @@ async def run_dashboard(
                     async with state._lock:
                         state.total_score = score
                         state.score_ts.append((time.time(), score))
-                except Exception:
-                    pass
-
-                # 拉取 SGLang 指标（Prometheus /metrics，失败静默跳过）
-                try:
-                    r = await client.get(f"{sglang_url}/metrics", timeout=1.0)
-                    for line in r.text.splitlines():
-                        if line.startswith("sglang:gen_throughput "):
-                            state.sglang_gen_throughput = float(line.split()[-1])
-                        elif line.startswith("sglang:num_running_reqs "):
-                            state.sglang_running_reqs = int(float(line.split()[-1]))
                 except Exception:
                     pass
 
