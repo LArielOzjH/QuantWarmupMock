@@ -1,21 +1,22 @@
 """
-选手服务主入口
+Contestant service entry point
 
-热身阶段启动方式：
+Warmup launch:
     CONFIG_PATH=mock_platform/mock_config.json \\
     TEAM_TOKEN=mytoken \\
     SGLANG_URL=http://localhost:30000 \\
     python -m contestant.main
 
-正式预赛（由 run.sh 调用，环境变量由平台注入）：
+Competition (called by run.sh, env vars injected by platform):
     python -m contestant.main
 
-并发模型：
-    主循环（poller）持续 query → should_accept → ask，
-    接到的任务放入 asyncio.PriorityQueue（高价值/紧迫任务优先出队）。
-    独立 dispatcher 协程持续从队列取任务，创建 handle_task 协程。
-    handle_task 用 asyncio.gather 并发处理所有 messages，
-    超过 SLA 时记录警告但仍提交（避免 600s 超时的 -2× 惩罚）。
+Concurrency model:
+    The main loop (poller) continuously calls query → should_accept → ask.
+    Accepted tasks are placed in an asyncio.PriorityQueue (high-value / urgent
+    tasks dequeue first). A dedicated dispatcher coroutine drains the queue and
+    spawns handle_task coroutines. handle_task uses asyncio.gather to process
+    all messages concurrently. Tasks that exceed their SLA deadline still submit
+    (to avoid the -2× penalty for missing the 600s hard timeout).
 """
 import asyncio
 import logging
@@ -44,7 +45,7 @@ TOKEN             = os.environ.get("TEAM_TOKEN", "secret_token")
 SGLANG_URL        = os.environ.get("SGLANG_URL", "http://localhost:30000")
 DURATION_OVERRIDE = os.environ.get("DURATION_OVERRIDE")
 
-# 奖励权重（与 scorer.py 保持一致）
+# Reward weights (kept in sync with scorer.py)
 SLA_WEIGHTS: dict[str, float] = {
     "Bronze": 1.0, "Silver": 1.2, "Gold": 1.5, "Platinum": 1.7,
     "Diamond": 2.0, "Stellar": 2.2, "Glorious": 2.4, "Supreme": 2.5,
@@ -53,7 +54,7 @@ TASK_WEIGHTS: dict[str, float] = {
     "generate_until": 2.0, "loglikelihood": 1.0, "loglikelihood_rolling": 1.0,
 }
 
-# SGLang 内部优先级：高 SLA → 高数值 → 优先处理（需 --enable-priority-scheduling）
+# SGLang internal priority: higher SLA → higher value → served first (requires --enable-priority-scheduling)
 SLA_SGLANG_PRIORITY: dict[str, int] = {
     "Bronze": 0, "Silver": 1, "Gold": 2, "Platinum": 3,
     "Diamond": 4, "Stellar": 5, "Glorious": 6, "Supreme": 7,
@@ -61,7 +62,7 @@ SLA_SGLANG_PRIORITY: dict[str, int] = {
 
 
 def _task_priority(overview: dict) -> float:
-    """计算任务优先级分数（负数，用于 min-heap；绝对值越大 = 越紧迫）。"""
+    """Compute task priority score (negative, for min-heap; larger absolute value = more urgent)."""
     sla_w  = SLA_WEIGHTS.get(overview.get("target_sla", "Bronze"), 1.0)
     task_w = TASK_WEIGHTS.get(overview.get("eval_request_type", "generate_until"), 1.0)
     return -(sla_w * task_w)
@@ -77,10 +78,11 @@ async def handle_task(
     scheduler: Scheduler,
     dash_state: DashboardState,
 ) -> None:
-    """单个任务的完整生命周期：并发推理所有 messages → 提交结果。
+    """Full lifecycle of a single task: concurrent inference over all messages → submit result.
 
-    即使超过 SLA 时间也继续提交（拿 0 分），以避免 600s 内未提交的 -2× 惩罚。
-    任务完成后将实际延迟上报给 LatencyTracker，用于后续接单决策。
+    Submits even when the SLA deadline is exceeded (scoring 0) to avoid the
+    -2× penalty for missing the 600s hard timeout. Reports actual latency to
+    LatencyTracker so future should_accept() decisions improve over time.
     """
     task_id   = task_data["overview"]["task_id"]
     sla       = overview.get("target_sla", "Bronze")
@@ -104,10 +106,10 @@ async def handle_task(
         ok = await platform.submit(task_data["overview"], result_messages)
         log.info(f"Task {task_id} submitted: {'ok' if ok else 'FAIL'} elapsed={elapsed:.2f}s")
 
-        # 上报延迟，供滑动窗口统计 → 影响后续 should_accept 决策
+        # report latency to sliding window → influences future should_accept() decisions
         scheduler.latency.record(task_type, sla, elapsed)
 
-        # 更新仪表盘
+        # update dashboard
         async with dash_state._lock:
             dash_state.completed += 1
             dash_state.completed_ts.append(time.time())
@@ -135,10 +137,10 @@ async def dispatcher(
     scheduler: Scheduler,
     stop_event: asyncio.Event,
 ) -> None:
-    """持续从优先队列取出任务并派发推理协程。
+    """Continuously drain the priority queue and dispatch inference coroutines.
 
-    优先队列保证高价值任务（Supreme generate_until）优先发往 SGLang，
-    而不是按到达顺序无差别处理。
+    The priority queue ensures high-value tasks (Supreme generate_until) are
+    sent to SGLang first rather than being processed in arrival order.
     """
     while not stop_event.is_set() or not task_queue.empty():
         try:
@@ -172,7 +174,7 @@ async def main() -> None:
     deadline      = session_start + duration
     task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
     stop_event = asyncio.Event()
-    seq        = 0  # 打破相同优先级时的 FIFO 顺序（避免 tuple 比较报错）
+    seq        = 0  # tiebreaker for equal priorities — preserves FIFO order (avoids tuple comparison errors)
 
     dispatch_task = asyncio.create_task(
         dispatcher(task_queue, platform, inference, scheduler, stop_event)
@@ -183,24 +185,24 @@ async def main() -> None:
 
     try:
         while loop.time() < deadline:
-            # 1. 拉取任务概要
+            # 1. fetch task overview
             overview = await platform.query()
             if overview is None:
                 await asyncio.sleep(0.1)
                 continue
 
-            # 2. 调度决策：是否接单（负载阈值 + 延迟感知）
+            # 2. scheduling decision: accept or reject (load threshold + latency estimate)
             if not scheduler.should_accept(overview):
                 async with dash_state._lock:
                     dash_state.rejected += 1
-                await asyncio.sleep(0)  # 让出事件循环后立即重试，不额外等待
+                await asyncio.sleep(0)  # yield event loop, retry immediately
                 continue
 
-            # 3. 接单，获取完整任务
+            # 3. accept task, fetch full task data
             task_id   = overview["task_id"]
             task_data = await platform.ask(task_id, overview["target_sla"])
             if task_data is None:
-                continue  # rejected or closed，重新 query
+                continue  # rejected or closed — re-query
 
             sla           = overview["target_sla"]
             deadline_time = loop.time() + SLA_TTFT.get(sla, 600.0)
@@ -218,17 +220,17 @@ async def main() -> None:
                 f"prio={-priority:.1f}"
             )
 
-            # 4. 放入优先队列，dispatcher 协程会按优先级取出并派发
+            # 4. enqueue into priority queue; dispatcher coroutine dequeues in priority order
             seq += 1
             await task_queue.put(
                 (priority, seq, task_data, overview, deadline_time, sglang_prio, dash_state)
             )
 
     finally:
-        # 通知 dispatcher 和 dashboard 停止
+        # signal dispatcher and dashboard to stop
         stop_event.set()
         await asyncio.gather(dispatch_task, dashboard_task, return_exceptions=True)
-        # 等待所有正在执行的推理任务完成
+        # wait for all in-flight inference tasks to finish
         pending = [
             t for t in asyncio.all_tasks()
             if t is not asyncio.current_task()

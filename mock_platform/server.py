@@ -1,17 +1,18 @@
 """
-Mock 评测平台服务器
+Mock evaluation platform server
 
-启动命令：
+Launch command:
     python -m uvicorn mock_platform.server:app --host 0.0.0.0 --port 8003
 
-实现了官方文档中的四个接口：
+Implements the four endpoints from the official spec:
     POST /register
     POST /query
     POST /ask
     POST /submit
-以及额外的调试接口：
-    GET  /scores   — 查看当前各队伍得分
-    GET  /status   — 查看任务队列状态
+
+Plus additional debug endpoints:
+    GET  /scores   — view current scores per team
+    GET  /status   — view task queue status
 """
 import asyncio
 import dataclasses
@@ -29,12 +30,12 @@ from mock_platform.task_generator import FullTask, generate_task
 
 
 # ---------------------------------------------------------------------------
-# 共享状态
+# Shared state
 # ---------------------------------------------------------------------------
 _state: dict = {
     "tokens": {},           # token -> team_name
     "task_counter": 1,
-    "available_tasks": [],  # list[FullTask]，待抢
+    "available_tasks": [],  # list[FullTask], available for bidding
     "active_tasks": {},     # task_id -> {"task": FullTask, "token": str, "ask_time": float}
     "completed_tasks": set(),
     "scores": {},           # token -> float
@@ -42,17 +43,17 @@ _state: dict = {
 
 
 # ---------------------------------------------------------------------------
-# 后台任务：持续生成任务流
+# Background task: continuously generate task stream
 # ---------------------------------------------------------------------------
 async def _task_producer():
     while True:
-        # 每次最多补充 5 道题，保持队列充盈（缓冲上限 30）
+        # refill up to 5 tasks per tick, keeping the buffer at most 30
         to_add = min(5, 30 - len(_state["available_tasks"]))
         for _ in range(max(0, to_add)):
             task = generate_task(_state["task_counter"])
             _state["task_counter"] += 1
             _state["available_tasks"].append(task)
-        await asyncio.sleep(0.05)  # 0.3s → 0.05s，~30 tasks/s 生成上限
+        await asyncio.sleep(0.05)  # 0.3s → 0.05s, ~30 tasks/s generation ceiling
 
 
 @asynccontextmanager
@@ -65,7 +66,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
-# 请求/响应模型
+# Request / response models
 # ---------------------------------------------------------------------------
 class RegisterReq(BaseModel):
     name: str
@@ -93,7 +94,7 @@ class SubmitReq(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 工具函数
+# Utility functions
 # ---------------------------------------------------------------------------
 def _task_to_overview_dict(task: FullTask) -> dict:
     ov = task.overview
@@ -121,7 +122,7 @@ def _require_token(token: str):
 
 
 # ---------------------------------------------------------------------------
-# 接口实现
+# Endpoint implementations
 # ---------------------------------------------------------------------------
 @app.post("/register")
 async def register(req: RegisterReq):
@@ -136,7 +137,7 @@ async def query(req: QueryReq):
     available = _state["available_tasks"]
     if not available:
         raise HTTPException(status_code=404, detail="no tasks available")
-    # 随机返回一个任务概要，避免调度器拒绝某任务后循环拿到同一个任务
+    # return a random overview to prevent the scheduler from getting stuck on the same task
     return _task_to_overview_dict(random.choice(available))
 
 
@@ -149,7 +150,7 @@ async def ask(req: AskReq):
     )
     if task is None:
         return {"status": "closed"}
-    # 初赛规则：SLA 必须与 target_sla 完全一致
+    # competition rule: SLA must exactly match target_sla
     if req.sla != task.overview.target_sla:
         return {"status": "rejected", "reason": "SLA must match target"}
     available.remove(task)
@@ -168,7 +169,7 @@ async def submit(req: SubmitReq):
 
     task_id = req.msg.overview.get("task_id")
     if task_id in _state["completed_tasks"]:
-        return {"status": "ok"}  # 幂等
+        return {"status": "ok"}  # idempotent
 
     rec = _state["active_tasks"].get(task_id)
     if rec is None:
@@ -179,8 +180,8 @@ async def submit(req: SubmitReq):
     ov        = task.overview
     sla_ttft  = SLA_LEVELS[ov.target_sla]["ttft_avg"]
 
-    # 热身阶段：mock 正确性 = 1.0（无参考模型）
-    # 正式预赛：此处替换为与参考模型对比的逻辑
+    # warmup phase: mock correctness = 1.0 (no reference model)
+    # competition: replace with logic that compares against reference model output
     correctness = 1.0
 
     if elapsed <= sla_ttft:
@@ -189,7 +190,7 @@ async def submit(req: SubmitReq):
         )
         _state["scores"][token] = _state["scores"].get(token, 0.0) + reward
     elif elapsed <= HARD_TIMEOUT_S:
-        pass  # SLA 超时但 600s 内：不得分不扣分
+        pass  # past SLA but within 600s: no score, no penalty
     else:
         penalty = calc_penalty(ov.eval_request_type, ov.target_sla, ov.eval_sampling_param)
         _state["scores"][token] = _state["scores"].get(token, 0.0) - penalty
@@ -200,7 +201,7 @@ async def submit(req: SubmitReq):
 
 
 # ---------------------------------------------------------------------------
-# 调试接口
+# Debug endpoints
 # ---------------------------------------------------------------------------
 @app.get("/scores")
 async def get_scores():

@@ -1,11 +1,11 @@
 """
-终端实时仪表盘
+Real-time terminal dashboard
 
-用 rich.live.Live 每 0.5s 刷新一次，展示：
-  - 实时得分 & 增速
-  - 任务统计（接受/拒绝/in-flight，按 SLA 分类）
-  - 延迟分布（avg / P95 / SLA达标率，按 task_type × SLA）
-  - 每秒完成任务数
+Uses rich.live.Live to refresh every 0.5s, displaying:
+  - Live score & rate
+  - Task stats (accepted / rejected / in-flight, by SLA)
+  - Latency distribution (avg / P95 / SLA hit rate, by task_type × SLA)
+  - Tasks completed per second
 """
 import asyncio
 import collections
@@ -19,13 +19,13 @@ from rich.columns import Columns
 from rich.console import Console
 from rich.layout import Layout
 
-# 模块级共享 Console，供 main.py 的 RichHandler 使用，
-# 保证 logging 输出和 Live 面板走同一个渲染通道，避免重复打印。
+# Module-level shared Console, used by main.py's RichHandler so that logging
+# output and the Live panel go through the same render channel, avoiding duplicate output.
 _console = Console()
 
 
 def get_console() -> Console:
-    """返回仪表盘使用的共享 Console 实例。"""
+    """Return the shared Console instance used by the dashboard."""
     return _console
 from rich.live import Live
 from rich.panel import Panel
@@ -44,42 +44,42 @@ TASK_TYPE_SHORT = {
 
 @dataclass
 class DashboardState:
-    # 得分
+    # score
     total_score: float = 0.0
     score_ts: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=30)
-    )  # (timestamp, score) 对，用于计算增速
+    )  # (timestamp, score) pairs for rate calculation
 
-    # 任务计数
+    # task counters
     accepted: int = 0
     rejected: int = 0
     completed: int = 0
     sla_missed: int = 0
     sla_counts: dict = field(default_factory=dict)  # sla → accepted count
 
-    # 最近任务日志
+    # recent task log
     recent_tasks: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=8)
     )
-    # 每条格式: {task_id, sla, task_type, elapsed, ok, sla_hit}
+    # each entry: {task_id, sla, task_type, elapsed, ok, sla_hit}
 
-    # 任务吞吐（自计算：最近 10s 完成的任务数）
+    # task throughput (self-computed: number of tasks completed in the last 10s)
     completed_ts: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=100)
-    )  # 每次完成时记录 timestamp
+    )  # timestamp recorded on each task completion
 
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _task_rate(state: DashboardState) -> float:
-    """最近 10s 完成的任务数/秒。"""
+    """Tasks completed per second over the last 10s."""
     now = time.time()
     recent = sum(1 for t in state.completed_ts if now - t <= 10.0)
     return recent / 10.0
 
 
 def _score_rate(state: DashboardState) -> float:
-    """计算最近 10s 的得分增速（分/秒）。"""
+    """Score gain rate (points/second) over the last 10s."""
     now = time.time()
     window = [(t, s) for t, s in state.score_ts if now - t <= 10.0]
     if len(window) < 2:
@@ -102,7 +102,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
         Layout(name="tasks", ratio=2),
     )
 
-    # ── 得分面板 ──────────────────────────────────────────────
+    # ── Score panel ───────────────────────────────────────────────────
     rate = _score_rate(state)
     score_text = Text()
     score_text.append(f" {state.total_score:.2f}\n", style="bold green")
@@ -111,7 +111,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
     score_text.append(f" {task_rate:.1f} tasks/s", style="dim")
     layout["score"].update(Panel(score_text, title="Score", box=box.ROUNDED))
 
-    # ── 任务统计面板 ──────────────────────────────────────────
+    # ── Task stats panel ──────────────────────────────────────────────
     in_flight = scheduler.active_count
     hit_pct = (
         f"{(state.completed - state.sla_missed) / state.completed * 100:.0f}%"
@@ -124,7 +124,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
     tasks_text.append(f"SLA missed: {state.sla_missed}  ", style="red")
     tasks_text.append(f"Hit: {hit_pct}\n", style="cyan")
 
-    # 按 SLA 显示接受数
+    # show accepted count per SLA
     sla_parts = []
     for sla in SLA_ORDER:
         cnt = state.sla_counts.get(sla, 0)
@@ -133,7 +133,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
     tasks_text.append(" " + "  ".join(sla_parts) if sla_parts else " --", style="dim")
     layout["tasks"].update(Panel(tasks_text, title="Tasks", box=box.ROUNDED))
 
-    # ── 延迟面板 ──────────────────────────────────────────────
+    # ── Latency panel ─────────────────────────────────────────────────
     lat_table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
     lat_table.add_column("SLA", style="cyan", width=10)
     lat_table.add_column("Type", width=10)
@@ -142,7 +142,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
     lat_table.add_column("hit%", justify="right", width=6)
 
     keys = scheduler.latency.all_keys()
-    # 按 SLA 顺序排序
+    # sort by SLA order
     sla_rank = {s: i for i, s in enumerate(SLA_ORDER)}
     keys_sorted = sorted(keys, key=lambda k: (sla_rank.get(k[1], 99), k[0]))
     for task_type, sla in keys_sorted:
@@ -162,7 +162,7 @@ def _render(state: DashboardState, scheduler) -> Layout:
         lat_table.add_row("--", "--", "--", "--", "--")
     layout["latency"].update(Panel(lat_table, title="Latency (sliding window)", box=box.ROUNDED))
 
-    # ── 最近任务面板 ──────────────────────────────────────────
+    # ── Recent tasks panel ────────────────────────────────────────────
     recent_table = Table(box=box.SIMPLE, show_header=False)
     recent_table.add_column("status", width=6)
     recent_table.add_column("task_id", width=8)
@@ -195,7 +195,7 @@ async def run_dashboard(
     stop_event: asyncio.Event,
     inference=None,
 ) -> None:
-    """后台协程：轮询得分 + SGLang 指标，驱动 rich Live 刷新。"""
+    """Background coroutine: polls score + SGLang metrics and drives rich Live refresh."""
     tick = 0
     async with httpx.AsyncClient() as client:
         with Live(
@@ -206,7 +206,7 @@ async def run_dashboard(
             vertical_overflow="visible",
         ) as live:
             while not stop_event.is_set():
-                # 拉取平台得分
+                # fetch platform score
                 try:
                     r = await client.get(f"{platform_url}/scores", timeout=1.0)
                     data = r.json()
@@ -217,7 +217,7 @@ async def run_dashboard(
                 except Exception:
                     pass
 
-                # 每 4 次刷新（2s）更新一次 SGLang 队列深度
+                # every 4 ticks (2s) update SGLang queue depth
                 if tick % 4 == 0 and inference is not None:
                     try:
                         info = await inference.server_info()

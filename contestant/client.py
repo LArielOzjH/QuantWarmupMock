@@ -1,7 +1,7 @@
 """
-平台 API 客户端
+Platform API client
 
-封装与评测平台（真实或 mock）的四个 HTTP 接口：
+Wraps the four HTTP endpoints of the evaluation platform (real or mock):
     POST /register
     POST /query
     POST /ask
@@ -39,7 +39,7 @@ class PlatformClient:
         return ok
 
     async def query(self) -> Optional[dict]:
-        """拉取一道任务概要。无任务时返回 None。"""
+        """Fetch one task overview. Returns None when no tasks are available."""
         resp = await self._client.post(
             f"{self.platform_url}/query",
             json={"token": self.token},
@@ -50,10 +50,10 @@ class PlatformClient:
         return resp.json()
 
     async def ask(self, task_id: int, sla: str) -> Optional[dict]:
-        """接受任务，返回完整任务数据。
+        """Accept a task and return its full data.
 
         Returns:
-            task dict（含 overview + messages），或 None（rejected / closed）
+            task dict (with overview + messages), or None if rejected / closed.
         """
         resp = await self._client.post(
             f"{self.platform_url}/ask",
@@ -67,7 +67,7 @@ class PlatformClient:
         return None
 
     async def submit(self, task_overview: dict, messages: list) -> bool:
-        """提交推理结果。"""
+        """Submit inference results."""
         resp = await self._client.post(
             f"{self.platform_url}/submit",
             json={

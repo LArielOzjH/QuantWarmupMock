@@ -1,17 +1,17 @@
 """
-SGLang 推理后端接口
+SGLang inference backend interface
 
-支持三种评测请求类型：
-  - generate_until：生成文本，遇到停止词截断
-  - loglikelihood：计算 log P(continuation | prompt)
-  - loglikelihood_rolling：计算整段 prompt 的 total log-likelihood
+Supports three evaluation request types:
+  - generate_until: generate text, truncate at stop tokens
+  - loglikelihood: compute log P(continuation | prompt)
+  - loglikelihood_rolling: compute total log-likelihood of an entire prompt
 
-SGLang 启动命令（热身阶段，Qwen3-0.6B）：
+SGLang launch command (warmup, Qwen3-0.6B):
     python -m sglang.launch_server \\
         --model-path /Users/hanzhuojun/Model/Qwen3-0.6B \\
         --host 0.0.0.0 --port 30000 --tp-size 1
 
-正式预赛（Qwen3-32B，由 run.sh 自动启动）：
+Competition (Qwen3-32B, launched automatically by run.sh):
     python -m sglang.launch_server \\
         --model-path "${MODEL_PATH}" \\
         --host 0.0.0.0 --port 30000 --tp-size <N> \\
@@ -28,21 +28,22 @@ log = logging.getLogger(__name__)
 
 
 class SGLangClient:
-    """封装 SGLang HTTP API，支持三种评测请求类型。
+    """Wraps the SGLang HTTP API for the three evaluation request types.
 
-    所有推理方法均为 async，使用 httpx.AsyncClient。
-    process_messages() 通过 asyncio.gather 并发处理同一任务的所有 message，
-    使多条请求同时到达 SGLang，触发 continuous batching。
+    All inference methods are async and use httpx.AsyncClient.
+    process_messages() dispatches all messages of a single task concurrently
+    via asyncio.gather, so multiple requests hit SGLang simultaneously and
+    trigger continuous batching.
 
-    priority 参数（0-7）透传给 SGLang 的内部调度器：
-    - 需要 SGLang 以 --enable-priority-scheduling 启动
-    - 未开启时 priority 字段被静默忽略，不影响功能
+    The priority argument (0-7) is forwarded to SGLang's internal scheduler:
+    - Requires SGLang to be launched with --enable-priority-scheduling
+    - Silently ignored if that flag is not set; does not affect correctness
 
     Args:
-        base_url:   SGLang 服务地址，如 http://localhost:30000
-        model_name: 模型名称（用于 /v1/completions 的 model 字段）
-        model_path: 模型本地路径（用于加载 tokenizer 以精确计算 logprob）
-        timeout:    HTTP 请求超时（秒）
+        base_url:   SGLang server address, e.g. http://localhost:30000
+        model_name: model name (used in the /v1/completions 'model' field)
+        model_path: local model path (used to load tokenizer for accurate logprob slicing)
+        timeout:    HTTP request timeout (seconds)
     """
 
     def __init__(
@@ -67,17 +68,18 @@ class SGLangClient:
                 log.warning(f"Tokenizer not available ({e}), using char-count fallback")
 
     # ------------------------------------------------------------------
-    # 公开接口
+    # Public interface
     # ------------------------------------------------------------------
 
     async def generate_until(self, prompt: str, gen_kwargs: dict, priority: int = 0) -> str:
-        """生成文本，遇到 until 停止词或达到 max_gen_toks 时停止。
+        """Generate text until a stop token or max_gen_toks is reached.
 
         Args:
-            priority: SGLang 内部调度优先级（0=最低，7=最高）；需服务端开启优先调度
+            priority: SGLang internal scheduling priority (0=lowest, 7=highest);
+                      requires server-side priority scheduling to be enabled
 
         Returns:
-            生成的文本字符串（不含 prompt）
+            Generated text string (not including the prompt)
         """
         stop = gen_kwargs.get("until") or []
         payload = {
@@ -95,16 +97,16 @@ class SGLangClient:
         return resp.json()["choices"][0]["text"]
 
     async def loglikelihood(self, prompt: str, continuation: str, priority: int = 0) -> float:
-        """计算 log P(continuation | prompt)。
+        """Compute log P(continuation | prompt).
 
-        使用 SGLang 原生 /generate 端点，获取 input_token_logprobs，
-        提取 continuation 部分 token 的 logprob 之和。
+        Uses SGLang's native /generate endpoint to obtain input_token_logprobs,
+        then sums the logprobs of the continuation tokens.
 
         Args:
-            priority: SGLang 内部调度优先级（0=最低，7=最高）
+            priority: SGLang internal scheduling priority (0=lowest, 7=highest)
 
         Returns:
-            对数概率（负数，越接近 0 越好）
+            Log probability (negative float; closer to 0 is better)
         """
         full_text = prompt + continuation
         continuation_token_count = self._continuation_token_count(prompt, continuation)
@@ -127,17 +129,17 @@ class SGLangClient:
             log.warning("SGLang returned empty input_token_logprobs, returning -100.0")
             return -100.0
 
-        # token_logprobs 格式: list of [logprob, token_id, token_text]
+        # token_logprobs format: list of [logprob, token_id, token_text]
         return sum(entry[0] for entry in token_logprobs[-continuation_token_count:])
 
     async def loglikelihood_rolling(self, prompt: str, priority: int = 0) -> float:
-        """计算整段 prompt 文本的 total log-likelihood（rolling perplexity 所需）。
+        """Compute the total log-likelihood of an entire prompt (for rolling perplexity).
 
         Args:
-            priority: SGLang 内部调度优先级（0=最低，7=最高）
+            priority: SGLang internal scheduling priority (0=lowest, 7=highest)
 
         Returns:
-            所有 token（除第一个）的 logprob 之和
+            Sum of logprobs for all tokens except the first
         """
         payload = {
             "text": prompt,
@@ -156,23 +158,23 @@ class SGLangClient:
             log.warning("SGLang returned empty input_token_logprobs for rolling, returning -100.0")
             return -100.0
 
-        # 跳过第一个 token（无前文，无 logprob 意义）
+        # skip the first token (no prior context, logprob is meaningless)
         return sum(entry[0] for entry in token_logprobs[1:])
 
     async def process_messages(self, messages: list[dict], priority: int = 0) -> list[dict]:
-        """并发处理一个任务的所有 messages（asyncio.gather）。
+        """Concurrently process all messages of a single task (via asyncio.gather).
 
-        同一任务的多条 message（如 loglikelihood 多选题的 4 个候选答案）
-        同时发往 SGLang，触发 continuous batching：
-        - RadixAttention 对共享 prompt 只做一次 prefill
-        - 4 个 continuation 并行计算
-        - TTFT 接近单条请求延迟，而非 4 倍
+        Multiple messages in one task (e.g. 4 loglikelihood choices) are sent to
+        SGLang simultaneously, triggering continuous batching:
+        - RadixAttention computes the shared prompt prefix once
+        - 4 continuations are evaluated in parallel
+        - TTFT is close to a single-request latency, not 4×
 
         Args:
-            priority: 透传给所有底层推理请求的 SGLang 优先级
+            priority: forwarded to all underlying inference requests as SGLang priority
 
         Returns:
-            填充了 response / accuracy 的 messages 列表，顺序与输入一致
+            List of messages with response / accuracy filled in, in input order
         """
         async def _process_one(msg: dict) -> dict:
             m = dict(msg)
@@ -199,7 +201,7 @@ class SGLangClient:
         return list(await asyncio.gather(*(_process_one(msg) for msg in messages)))
 
     async def health(self) -> bool:
-        """检查 SGLang 服务是否就绪。"""
+        """Check whether the SGLang server is ready."""
         try:
             resp = await self._client.get(f"{self.base_url}/health", timeout=5.0)
             return resp.status_code == 200
@@ -207,9 +209,10 @@ class SGLangClient:
             return False
 
     async def server_info(self) -> dict:
-        """获取 SGLang 运行时队列状态（num_waiting_reqs, num_running_reqs 等）。
+        """Fetch SGLang runtime queue stats (num_waiting_reqs, num_running_reqs, etc.).
 
-        返回空 dict 表示查询失败（服务不支持或超时），调用方应容忍。
+        Returns an empty dict on failure (unsupported endpoint or timeout);
+        callers should tolerate this gracefully.
         """
         try:
             resp = await self._client.get(
@@ -223,13 +226,13 @@ class SGLangClient:
         await self._client.aclose()
 
     # ------------------------------------------------------------------
-    # 内部工具
+    # Internal helpers
     # ------------------------------------------------------------------
 
     def _continuation_token_count(self, prompt: str, continuation: str) -> int:
-        """精确计算 continuation 对应的 token 数量。
+        """Compute the number of tokens in the continuation.
 
-        优先使用 tokenizer；tokenizer 不可用时退回字符数 / 4 的粗估。
+        Uses the tokenizer when available; falls back to len(continuation) // 4 otherwise.
         """
         if self._tokenizer is not None:
             prompt_ids = self._tokenizer.encode(prompt, add_special_tokens=False)

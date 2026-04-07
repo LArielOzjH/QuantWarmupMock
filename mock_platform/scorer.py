@@ -7,7 +7,7 @@ from mock_platform.config import (
 
 
 def _w_sp(task_type: str, sampling_param: str) -> float:
-    """采样参数权重：仅 generate_until 有效，其余任务类型固定为 1.0。"""
+    """Sampling param weight: only applies to generate_until; all other task types return 1.0."""
     if task_type == "generate_until":
         return SAMPLING_PARAMS[sampling_param]["weight"]
     return 1.0
@@ -19,7 +19,7 @@ def calc_reward(
     sampling_param: str,
     correctness: float,
 ) -> float:
-    """计算单题正常得分（SLA 内提交）。
+    """Compute the reward for a task submitted within its SLA.
 
     R_i = w_task × w_sla × w_sp × C_i
     """
@@ -34,7 +34,7 @@ def calc_penalty(
     sla: str,
     sampling_param: str,
 ) -> float:
-    """计算未完成（600s 超时）扣分。
+    """Compute the penalty for a task not submitted within the 600s hard timeout.
 
     Penalty = 2 × w_task × w_sla × w_sp
     """

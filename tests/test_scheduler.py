@@ -14,7 +14,7 @@ def _overview(sla: str, task_type: str = "generate_until", task_id: int = 1) -> 
 
 
 # ---------------------------------------------------------------------------
-# 基础接单逻辑
+# Basic accept/reject logic
 # ---------------------------------------------------------------------------
 
 def test_accept_bronze_when_idle():
@@ -28,7 +28,7 @@ def test_accept_gold_when_idle():
 
 
 def test_reject_when_at_max_concurrent():
-    """active_count == max_concurrent 时硬拒绝。"""
+    """Hard reject when active_count == max_concurrent."""
     s = Scheduler(max_concurrent=4)
     for i in range(4):
         s.mark_active(i)
@@ -36,7 +36,7 @@ def test_reject_when_at_max_concurrent():
 
 
 def test_cold_start_accepts_any_sla():
-    """冷启动无历史数据时，任何 SLA 在负载允许范围内均接受。"""
+    """During cold start (no history), accept any SLA within concurrency limit."""
     s = Scheduler(max_concurrent=8)
     for sla in SLA_TTFT:
         assert s.should_accept(_overview(sla)) is True, f"Should accept {sla} during cold start"
@@ -68,12 +68,12 @@ def test_active_count():
 
 def test_mark_complete_idempotent():
     s = Scheduler(max_concurrent=4)
-    s.mark_complete(999)  # 从未 active，不应报错
+    s.mark_complete(999)  # never was active — should not raise
     assert s.active_count == 0
 
 
 # ---------------------------------------------------------------------------
-# LatencyTracker 单元测试
+# LatencyTracker unit tests
 # ---------------------------------------------------------------------------
 
 def test_latency_tracker_no_data_returns_none():
@@ -90,7 +90,7 @@ def test_latency_tracker_single_record():
 
 
 def test_latency_tracker_ewma_updates():
-    """EWMA 应向新样本方向移动。"""
+    """EWMA should move toward the new sample."""
     t = LatencyTracker()
     t.record("generate_until", "Gold", 1.0)
     ewma_after_first = t.ewma_latency("generate_until", "Gold")
@@ -100,16 +100,16 @@ def test_latency_tracker_ewma_updates():
 
 
 def test_latency_tracker_ewma_formula():
-    """精确校验 EWMA 公式：alpha=0.3。"""
+    """Verify EWMA formula exactly: alpha=0.3."""
     t = LatencyTracker()
     t.record("loglikelihood", "Bronze", 1.0)
     t.record("loglikelihood", "Bronze", 2.0)
-    # 第1次: ewma=1.0; 第2次: 0.3*2.0 + 0.7*1.0 = 1.3
+    # step 1: ewma=1.0; step 2: 0.3*2.0 + 0.7*1.0 = 1.3
     assert abs(t.ewma_latency("loglikelihood", "Bronze") - 1.3) < 1e-9
 
 
 def test_latency_tracker_average():
-    """avg_latency 基于 (task_type, sla) 样本窗口。"""
+    """avg_latency is based on the (task_type, sla) sample window."""
     t = LatencyTracker(window=10)
     t.record("loglikelihood", "Bronze", 1.0)
     t.record("loglikelihood", "Bronze", 3.0)
@@ -122,21 +122,21 @@ def test_latency_tracker_sliding_window_evicts_old():
         t.record("generate_until", "Supreme", v)
     t.record("generate_until", "Supreme", 0.1)
     avg = t.avg_latency("generate_until", "Supreme")
-    # 窗口内：[10.0, 10.0, 0.1]
+    # window contains: [10.0, 10.0, 0.1]
     assert abs(avg - (10.0 + 10.0 + 0.1) / 3) < 1e-9
 
 
 def test_latency_tracker_separate_sla_buckets():
-    """不同 SLA 的 EWMA 互不干扰（核心：防止 Bronze 污染 Supreme）。"""
+    """Different SLA buckets must not interfere (key: prevents Bronze from contaminating Supreme)."""
     t = LatencyTracker(window=10)
-    t.record("generate_until", "Bronze", 3.0)   # 慢
-    t.record("generate_until", "Supreme", 0.3)  # 快
+    t.record("generate_until", "Bronze", 3.0)   # slow
+    t.record("generate_until", "Supreme", 0.3)  # fast
     assert t.ewma_latency("generate_until", "Bronze") == 3.0
     assert t.ewma_latency("generate_until", "Supreme") == 0.3
 
 
 def test_latency_tracker_separate_task_type_buckets():
-    """不同 task_type 互不干扰。"""
+    """Different task types must not interfere."""
     t = LatencyTracker(window=10)
     t.record("generate_until", "Gold", 5.0)
     t.record("loglikelihood", "Gold", 1.0)
@@ -145,17 +145,17 @@ def test_latency_tracker_separate_task_type_buckets():
 
 
 # ---------------------------------------------------------------------------
-# 动态延迟估算决策测试
+# Dynamic latency estimation decision tests
 # ---------------------------------------------------------------------------
 
 def test_accept_when_no_latency_data():
-    """冷启动无历史数据，不因延迟检查拒绝。"""
+    """No latency history (cold start) — do not reject due to latency check."""
     s = Scheduler(max_concurrent=8)
     assert s.should_accept(_overview("Supreme")) is True
 
 
 def test_reject_when_estimated_exceeds_sla():
-    """ewma × (1 + load_ratio) >= sla_ttft 时拒绝。load=0 → estimated = ewma。"""
+    """Reject when ewma × (1 + load_ratio) >= sla_ttft. At load=0, estimated = ewma."""
     s = Scheduler(max_concurrent=8)
     sla_limit = SLA_TTFT["Supreme"]  # 0.5s
     s.latency.record("generate_until", "Supreme", sla_limit + 0.1)
@@ -163,7 +163,7 @@ def test_reject_when_estimated_exceeds_sla():
 
 
 def test_accept_when_estimated_within_sla():
-    """ewma × (1 + load_ratio) < sla_ttft 时接受。"""
+    """Accept when ewma × (1 + load_ratio) < sla_ttft."""
     s = Scheduler(max_concurrent=8)
     sla_limit = SLA_TTFT["Gold"]  # 6.0s
     s.latency.record("generate_until", "Gold", sla_limit - 1.0)  # ewma=5.0 < 6.0
@@ -171,24 +171,24 @@ def test_accept_when_estimated_within_sla():
 
 
 def test_bronze_slow_does_not_reject_supreme():
-    """Bronze gen 慢不影响 Supreme gen 决策（关键：防止跨污染）。"""
+    """Slow Bronze gen must not affect Supreme gen decisions (cross-contamination guard)."""
     s = Scheduler(max_concurrent=8)
-    # Bronze gen 很慢
+    # Bronze gen is slow
     s.latency.record("generate_until", "Bronze", 3.0)
-    # Supreme gen 快（独立 EWMA）
+    # Supreme gen is fast (independent EWMA)
     s.latency.record("generate_until", "Supreme", 0.3)
-    # Supreme (0.5s SLA): ewma=0.3 × 1.0 = 0.3 < 0.5 → 接受
+    # Supreme (0.5s SLA): ewma=0.3 × 1.0 = 0.3 < 0.5 → accept
     assert s.should_accept(_overview("Supreme")) is True
 
 
 def test_dynamic_estimation_rejects_at_high_load():
-    """Glorious：低负载接受，高负载因排队因子超标而拒绝。"""
+    """Glorious: accepted at low load, rejected at high load due to queuing factor."""
     s = Scheduler(max_concurrent=4)
     s.latency.record("generate_until", "Glorious", 0.6)
-    # load=0 → estimated = 0.6 × 1.0 = 0.6 < 0.8 → 接受
+    # load=0 → estimated = 0.6 × 1.0 = 0.6 < 0.8 → accept
     assert s.should_accept(_overview("Glorious")) is True
 
-    # load=0.75 → estimated = 0.6 × 1.75 = 1.05 > 0.8 → 拒绝
+    # load=0.75 → estimated = 0.6 × 1.75 = 1.05 > 0.8 → reject
     s.mark_active(1)
     s.mark_active(2)
     s.mark_active(3)
@@ -196,19 +196,19 @@ def test_dynamic_estimation_rejects_at_high_load():
 
 
 def test_latency_check_is_per_task_type():
-    """generate_until 超标不影响 loglikelihood 的决策。"""
+    """generate_until over SLA does not affect loglikelihood decisions."""
     s = Scheduler(max_concurrent=8)
     s.latency.record("generate_until", "Supreme", SLA_TTFT["Supreme"] + 0.1)
-    # loglikelihood Supreme 无 ewma 数据 → 冷启动 → 接受
+    # loglikelihood Supreme has no ewma data → cold start → accept
     assert s.should_accept(_overview("Supreme", task_type="loglikelihood")) is True
 
 
 # ---------------------------------------------------------------------------
-# 探针机制测试
+# Probe mechanism tests
 # ---------------------------------------------------------------------------
 
 def test_probe_mechanism_fires_after_threshold():
-    """连续延迟拒绝 PROBE_THRESHOLD 次后，第 N 次强制放行。"""
+    """Force-accept on the Nth attempt after PROBE_THRESHOLD consecutive latency rejections."""
     s = Scheduler(max_concurrent=8)
     s.latency.record("generate_until", "Supreme", 1.0)  # ewma=1.0 > 0.5 SLA
 
@@ -220,7 +220,7 @@ def test_probe_mechanism_fires_after_threshold():
 
 
 def test_probe_resets_after_firing():
-    """探针放行后计数重置，之后继续正常拒绝。"""
+    """Counter resets after probe fires; subsequent calls resume normal rejection."""
     s = Scheduler(max_concurrent=8)
     s.latency.record("generate_until", "Supreme", 1.0)
 
@@ -231,7 +231,7 @@ def test_probe_resets_after_firing():
 
 
 def test_load_reject_does_not_increment_probe_counter():
-    """纯负载拒绝（load >= 1.0）不应计入探针计数器。"""
+    """Pure load rejections (load >= 1.0) must not increment the probe counter."""
     s = Scheduler(max_concurrent=2)
     s.latency.record("generate_until", "Supreme", 1.0)
     s.mark_active(1)
@@ -240,6 +240,6 @@ def test_load_reject_does_not_increment_probe_counter():
     for _ in range(PROBE_THRESHOLD + 2):
         assert s.should_accept(_overview("Supreme")) is False
 
-    # 释放一个 slot，但延迟估算仍超标，探针计数从 0 开始，不应立即触发
+    # free one slot; latency estimate still exceeds SLA, probe count starts at 0, should not fire yet
     s.mark_complete(1)
     assert s.should_accept(_overview("Supreme")) is False

@@ -22,5 +22,5 @@ TASK_TYPE_WEIGHTS = {
     "loglikelihood_rolling": 1.0,
 }
 
-PENALTY_MULTIPLIER = 2.0  # 未完成扣分 = 2 × w_task × w_sla × w_sp
-HARD_TIMEOUT_S = 600      # 超过此时间提交则扣分
+PENALTY_MULTIPLIER = 2.0  # penalty for missing hard timeout = 2 × w_task × w_sla × w_sp
+HARD_TIMEOUT_S = 600      # submitting after this deadline incurs a penalty

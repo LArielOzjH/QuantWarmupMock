@@ -1,10 +1,10 @@
 """
-SGLang 推理后端测试
+SGLang inference backend tests
 
-单元测试（无需 SGLang / 模型）：直接运行
+Unit tests (no SGLang / model required):
     python -m pytest tests/test_inference.py -m "not integration" -v
 
-集成测试（需要 SGLang 在 localhost:30000 运行）：
+Integration tests (requires SGLang running on localhost:30000):
     python -m sglang.launch_server \\
         --model-path /Users/hanzhuojun/Model/Qwen3-0.6B \\
         --host 0.0.0.0 --port 30000 --tp-size 1
@@ -28,11 +28,11 @@ MODEL_PATH = "/Users/hanzhuojun/Model/Qwen3-0.6B"
 
 
 # ---------------------------------------------------------------------------
-# 单元测试：mock 掉底层 HTTP，无需 SGLang 或模型
+# Unit tests: mock out HTTP layer, no SGLang or model required
 # ---------------------------------------------------------------------------
 
 async def test_process_messages_generate_until():
-    """process_messages 对 generate_until 正确填充 response，accuracy 为 None。"""
+    """process_messages fills response correctly for generate_until; accuracy is None."""
     client = SGLangClient(SGLANG_URL, "test-model")
     client.generate_until = AsyncMock(return_value="4")
 
@@ -51,7 +51,7 @@ async def test_process_messages_generate_until():
 
 
 async def test_process_messages_passes_priority():
-    """process_messages 将 priority 透传给底层推理方法。"""
+    """process_messages forwards priority to the underlying inference method."""
     client = SGLangClient(SGLANG_URL, "test-model")
     client.generate_until = AsyncMock(return_value="answer")
 
@@ -71,7 +71,7 @@ async def test_process_messages_passes_priority():
 
 
 async def test_process_messages_loglikelihood_concurrent():
-    """process_messages 并发调用 loglikelihood，结果顺序与输入一致。"""
+    """process_messages calls loglikelihood concurrently; result order matches input."""
     client = SGLangClient(SGLANG_URL, "test-model")
     client.loglikelihood = AsyncMock(side_effect=[-1.0, -5.0, -4.0, -3.5])
 
@@ -91,7 +91,7 @@ async def test_process_messages_loglikelihood_concurrent():
 
 
 async def test_process_messages_loglikelihood_rolling():
-    """process_messages 对 loglikelihood_rolling 正确填充 accuracy。"""
+    """process_messages fills accuracy correctly for loglikelihood_rolling."""
     client = SGLangClient(SGLANG_URL, "test-model")
     client.loglikelihood_rolling = AsyncMock(return_value=-12.5)
 
@@ -109,7 +109,7 @@ async def test_process_messages_loglikelihood_rolling():
 
 
 async def test_process_messages_preserves_other_fields():
-    """process_messages 保留原始 message 的其他字段（ID、eval_req_id 等）。"""
+    """process_messages preserves all original message fields (ID, eval_req_id, etc.)."""
     client = SGLangClient(SGLANG_URL, "test-model")
     client.generate_until = AsyncMock(return_value="answer")
 
@@ -129,7 +129,7 @@ async def test_process_messages_preserves_other_fields():
 
 
 # ---------------------------------------------------------------------------
-# 集成测试：需要 SGLang 服务在 localhost:30000 运行
+# Integration tests: require SGLang server running on localhost:30000
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -157,7 +157,7 @@ async def test_generate_until_returns_string(sglang_client):
 
 @pytest.mark.integration
 async def test_loglikelihood_correct_answer_ranks_highest(sglang_client):
-    """正确答案的 logprob 应高于错误答案。"""
+    """The correct answer should have a higher logprob than an incorrect answer."""
     prompt = "The capital of France is"
     lp_right = await sglang_client.loglikelihood(prompt, " Paris")
     lp_wrong  = await sglang_client.loglikelihood(prompt, " London")
@@ -174,7 +174,7 @@ async def test_loglikelihood_rolling_is_negative(sglang_client):
 
 @pytest.mark.integration
 async def test_process_messages_concurrent_loglikelihood(sglang_client):
-    """process_messages 并发调用：正确答案 accuracy 最高。"""
+    """Concurrent process_messages: correct answer should have the highest accuracy."""
     messages = [
         {"ID": i, "prompt": "The capital of France is",
          "eval_request_type": "loglikelihood",

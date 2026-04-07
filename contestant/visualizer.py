@@ -1,10 +1,10 @@
 """
-会话结束后生成 matplotlib 可视化图表，保存到 charts/YYYYMMDD_HHMMSS/ 目录。
+Generates matplotlib charts at session end, saved to charts/YYYYMMDD_HHMMSS/.
 
-生成三张图：
-  1. score_over_time.png   — 累计得分折线图
-  2. latency_by_sla.png    — 各 SLA × task_type 的平均延迟柱状图（误差条=P95）
-  3. task_breakdown.png    — 左：SLA分布饼图；右：SLA达标率柱状图
+Three charts are produced:
+  1. score_over_time.png   — cumulative score line chart
+  2. latency_by_sla.png    — avg latency bar chart per SLA × task_type (error bar = P95)
+  3. task_breakdown.png    — left: SLA distribution pie chart; right: SLA hit rate bar chart
 """
 import os
 from datetime import datetime
@@ -25,13 +25,13 @@ TASK_TYPE_COLORS = {
 
 def save_charts(state, scheduler, session_start: float) -> str:
     """
-    生成图表并保存到 charts/YYYYMMDD_HHMMSS/ 目录。
-    返回保存目录的路径字符串。
-    若 matplotlib 未安装则静默跳过，返回空字符串。
+    Generate charts and save to charts/YYYYMMDD_HHMMSS/.
+    Returns the output directory path as a string.
+    Silently skips and returns empty string if matplotlib is not installed.
     """
     try:
         import matplotlib
-        matplotlib.use("Agg")  # 无 GUI 环境
+        matplotlib.use("Agg")  # headless environment
         import matplotlib.pyplot as plt
         import matplotlib.ticker as ticker
         import numpy as np
@@ -65,7 +65,7 @@ def _plot_score_over_time(state, session_start, out_dir, plt, np):
     ax.set_title("Score Over Time")
     ax.grid(True, alpha=0.3)
 
-    # 标注最终得分
+    # annotate final score
     if scores:
         ax.annotate(
             f"Final: {scores[-1]:.2f}",
@@ -86,7 +86,7 @@ def _plot_latency_by_sla(scheduler, out_dir, plt, np):
     if not keys:
         return
 
-    # 找出有数据的 SLA 和 task_type 组合
+    # collect SLA and task_type combinations that have data
     present_slas = [s for s in SLA_ORDER
                     if any(k[1] == s for k in keys)]
     task_types = sorted(set(k[0] for k in keys))
@@ -127,7 +127,7 @@ def _plot_latency_by_sla(scheduler, out_dir, plt, np):
 def _plot_task_breakdown(state, scheduler, out_dir, plt):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    # 左：SLA分布饼图
+    # left: SLA distribution pie chart
     sla_counts = {k: v for k, v in state.sla_counts.items() if v > 0}
     if sla_counts:
         labels = list(sla_counts.keys())
@@ -138,7 +138,7 @@ def _plot_task_breakdown(state, scheduler, out_dir, plt):
         ax1.text(0.5, 0.5, "No data", ha="center", va="center")
         ax1.set_title("Task Distribution by SLA")
 
-    # 右：SLA达标率柱状图
+    # right: SLA hit rate bar chart
     keys = scheduler.latency.all_keys()
     hit_labels, hit_values, hit_colors = [], [], []
     for tt, sla in sorted(keys, key=lambda k: (SLA_ORDER.index(k[1]) if k[1] in SLA_ORDER else 99, k[0])):
@@ -157,7 +157,7 @@ def _plot_task_breakdown(state, scheduler, out_dir, plt):
         ax2.axhline(100, color="gray", linestyle="--", alpha=0.4)
         ax2.set_title("SLA Hit Rate by Category")
         ax2.grid(True, axis="y", alpha=0.3)
-        # 标注数值
+        # annotate bar values
         for bar, val in zip(bars, hit_values):
             ax2.text(bar.get_x() + bar.get_width() / 2, val + 1,
                      f"{val:.0f}%", ha="center", va="bottom", fontsize=8)
