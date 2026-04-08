@@ -27,13 +27,16 @@ except Exception:
     print("triton")
 EOF
 )
-echo "Using attention backend: ${ATTN_BACKEND}"
+# When attention falls back to triton (Blackwell), sampling must also avoid flashinfer
+SMPL_BACKEND=$( [ "${ATTN_BACKEND}" = "triton" ] && echo "pytorch" || echo "flashinfer" )
+echo "Using attention backend: ${ATTN_BACKEND}, sampling backend: ${SMPL_BACKEND}"
 
 # Start SGLang inference backend (background)
-# --schedule-policy fcfs     : required when priority scheduling is enabled (fcfs or lof)
+# --schedule-policy fcfs      : required when priority scheduling is enabled (fcfs or lof)
 # --enable-priority-scheduling: enables request-level priority queue so Supreme SLA tasks dequeue first
-# --chunked-prefill-size 4096: chunked prefill to reduce long-prompt impact on short-SLA TTFT
-# --attention-backend        : triton for Blackwell (SM 12.x), flashinfer otherwise
+# --chunked-prefill-size 4096 : chunked prefill to reduce long-prompt impact on short-SLA TTFT
+# --attention-backend         : triton for Blackwell (SM 12.x), flashinfer otherwise
+# --sampling-backend          : pytorch for Blackwell (flashinfer sampling JIT also fails on SM 12.x)
 python -m sglang.launch_server \
     --model-path "${MODEL_PATH}" \
     --host 0.0.0.0 \
@@ -42,7 +45,8 @@ python -m sglang.launch_server \
     --schedule-policy fcfs \
     --enable-priority-scheduling \
     --chunked-prefill-size 4096 \
-    --attention-backend "${ATTN_BACKEND}" &
+    --attention-backend "${ATTN_BACKEND}" \
+    --sampling-backend "${SMPL_BACKEND}" &
 SGLANG_PID=$!
 
 # 等待 SGLang 就绪（最多 55s，run.sh 总时限 60s）
