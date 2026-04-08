@@ -8,14 +8,32 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-# 检测 GPU 数量，用于 tensor parallelism
+# Detect GPU count and architecture
 TP_SIZE=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
 echo "Detected ${TP_SIZE} GPU(s), starting SGLang with tp-size=${TP_SIZE}"
 
-# 启动 SGLang 推理后端（后台运行）
-# --schedule-policy fcfs     : 开启 priority scheduling 时必须用 fcfs 或 lof；优先级队列会覆盖出队顺序
-# --enable-priority-scheduling: 开启请求级优先级队列，Supreme SLA 任务优先出队（要求 fcfs/lof 基础策略）
-# --chunked-prefill-size 4096: 分块 prefill，降低长 prompt 对短 SLA 任务 TTFT 的冲击
+# Detect if running on Blackwell (SM 12.x / RTX 5090).
+# torch.cuda.get_device_capability() fails for SM 12.x on CUDA < 12.9,
+# so a failed query reliably indicates Blackwell. FlashInfer JIT cannot
+# compile for SM 12.x in that case; fall back to the Triton backend.
+ATTN_BACKEND=$(python3 - <<'EOF'
+import torch
+try:
+    major, _ = torch.cuda.get_device_capability(0)
+    # SM 12.x is Blackwell; FlashInfer requires CUDA >= 12.9 for it
+    print("triton" if major >= 12 else "flashinfer")
+except Exception:
+    # Capability query failed -> likely Blackwell on CUDA < 12.9
+    print("triton")
+EOF
+)
+echo "Using attention backend: ${ATTN_BACKEND}"
+
+# Start SGLang inference backend (background)
+# --schedule-policy fcfs     : required when priority scheduling is enabled (fcfs or lof)
+# --enable-priority-scheduling: enables request-level priority queue so Supreme SLA tasks dequeue first
+# --chunked-prefill-size 4096: chunked prefill to reduce long-prompt impact on short-SLA TTFT
+# --attention-backend        : triton for Blackwell (SM 12.x), flashinfer otherwise
 python -m sglang.launch_server \
     --model-path "${MODEL_PATH}" \
     --host 0.0.0.0 \
@@ -23,7 +41,8 @@ python -m sglang.launch_server \
     --tp-size "${TP_SIZE}" \
     --schedule-policy fcfs \
     --enable-priority-scheduling \
-    --chunked-prefill-size 4096 &
+    --chunked-prefill-size 4096 \
+    --attention-backend "${ATTN_BACKEND}" &
 SGLANG_PID=$!
 
 # 等待 SGLang 就绪（最多 55s，run.sh 总时限 60s）

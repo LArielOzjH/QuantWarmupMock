@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 环境安装脚本（平台在首次运行前执行，结果会被缓存）
+# Environment setup script (executed once by the platform before run.sh; result is cached)
 set -e
 
 python3 -m venv .venv
@@ -8,9 +8,9 @@ source .venv/bin/activate
 pip install -r contestant/requirements.txt
 
 if [ -d "sglang" ]; then
-    # sglang 0.5.10rc0 在基础依赖中写死了 cuda-python==12.9。
-    # 竞赛服务器安装的是 CUDA 12.8，对应 cuda-python==12.8.0，版本不兼容。
-    # 将严格 pin 改为下限约束，让 pip 接受已有的 12.8.0（API 兼容，无功能影响）。
+    # sglang 0.5.10rc0 hard-pins cuda-python==12.9 in its base dependencies.
+    # The competition server has CUDA 12.8 (cuda-python==12.8.0), which is API-compatible.
+    # Relax the strict pin to a lower-bound so pip accepts the installed 12.8.0.
     sed -i 's/cuda-python==12\.9/cuda-python>=12.8/' sglang/python/pyproject.toml
     pip install -e "sglang/python/"
 else
@@ -18,7 +18,7 @@ else
     pip install "sglang[srt]"
 fi
 
-# flash-attn 不在 sglang 基础依赖中，但能显著提升吞吐量，安装失败不阻断流程
+# flash-attn is not in sglang's base deps but can improve throughput; failure is non-fatal
 echo "Attempting to install flash-attn (optional, improves throughput)..."
 pip install flash-attn --no-build-isolation 2>/dev/null \
     && echo "flash-attn installed." \
