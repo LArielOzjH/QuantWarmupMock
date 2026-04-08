@@ -373,12 +373,25 @@ curl http://localhost:8003/status
 
 ```bash
 # Terminal 1: start SGLang with priority scheduling
+# Standard (Ampere / Ada / older):
 python -m sglang.launch_server \
     --model-path /path/to/model \
     --host 0.0.0.0 --port 30000 --tp-size 1 \
     --schedule-policy fcfs \
     --enable-priority-scheduling \
     --chunked-prefill-size 4096
+
+# Blackwell (RTX 5090 / SM 12.x) on CUDA 12.8:
+# FlashInfer JIT cannot compile for SM 12.x without CUDA >= 12.9;
+# switch both attention and sampling backends to avoid it.
+python -m sglang.launch_server \
+    --model-path /path/to/model \
+    --host 0.0.0.0 --port 30000 --tp-size 4 \
+    --schedule-policy fcfs \
+    --enable-priority-scheduling \
+    --chunked-prefill-size 4096 \
+    --attention-backend triton \
+    --sampling-backend pytorch
 
 # Terminal 2: start mock platform
 python -m uvicorn mock_platform.server:app --host 0.0.0.0 --port 8003
@@ -398,8 +411,11 @@ curl http://localhost:8003/scores
 ### Competition submission
 
 ```bash
-# The platform runs setup.sh once (cached), then run.sh each evaluation
+# The platform runs setup.sh once (cached), then run.sh each evaluation.
 # Injected env vars: MODEL_PATH, CONFIG_PATH, CONTESTANT_PORT
+# run.sh auto-detects GPU count (tp-size) and GPU architecture:
+#   - Blackwell (SM 12.x) → --attention-backend triton --sampling-backend pytorch
+#   - All others          → default flashinfer backends
 bash contestant/run.sh
 ```
 
@@ -422,7 +438,8 @@ python -m pytest tests/test_inference.py -m integration -v
 | Aspect | Warmup | Competition |
 |--------|--------|-------------|
 | Platform | `localhost:8003` (mock) | Official platform (LAN) |
-| Model | Qwen3-8B (warmup) | Qwen3-32B (`/mnt/model/`) |
+| Model | Qwen3-8B (warmup) | Qwen3-32B |
+| GPU | Any CUDA GPU | 4× RTX 5090 (SM 12.0 / Blackwell) |
 | Task stream | Synthetic, from `task_generator.py` | Real, from official task pool |
 | Correctness scoring | Always 1.0 (no reference model) | Compared against reference model output |
 | Startup limit | None | `run.sh` must complete in 60 s |
