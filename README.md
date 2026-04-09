@@ -110,29 +110,94 @@ Penalty = −2 × w_task × w_sla × w_sp          (if not submitted within 600 
 
 ## Scheduling Strategy
 
-`contestant/scheduler.py` uses a dynamic latency-estimation model. A task is accepted when both conditions pass:
+`contestant/scheduler.py` implements a dynamic, queue-depth-aware admission controller. Every task returned by `/query` passes through `should_accept()` before the system calls `/ask`. The decision follows three sequential checks:
 
-**Condition 1 — Hard concurrency cap** (`active_count < max_concurrent`): never exceed the configured slot limit.
+---
 
-**Condition 2 — Dynamic latency estimate**:
+### Check 1 — Hard concurrency cap
 
 ```
-estimated_latency = ewma[(task_type, sla)] × (1 + load_ratio)
-accept  ←→  estimated_latency < sla_ttft
+active_count >= max_concurrent (= 64)  →  reject immediately
 ```
 
-- `ewma[(task_type, sla)]` — per-(task_type, sla) Exponential Weighted Moving Average (α=0.3) of recent ask→submit latency. 24 independent buckets (8 SLA × 3 types) prevent cross-contamination — a slow Bronze task's EWMA never inflates the estimate for a Supreme task.
-- `load_ratio` — acts as a queuing factor: at high load each new task waits longer for a GPU slot, so the estimate naturally increases.
-- **Cold start** (no history yet): check skipped, all tasks accepted up to the cap.
-- **Probe mechanism**: after `PROBE_THRESHOLD=8` consecutive rejections for the same (task_type, sla) key, one task is force-accepted to refresh the EWMA and prevent permanent starvation.
+`active_count` is the number of tasks currently accepted but not yet submitted. `max_concurrent = 64` acts as an emergency safety net only — in practice, Check 2 below rejects tasks well before this limit is reached.
 
-Examples with `ewma[("generate_until", "Glorious")] = 0.65 s`:
+---
 
-| SLA | TTFT | load=0 estimate | load=0.75 estimate | Decision |
-|-----|------|------------------|--------------------|----------|
-| Glorious | 0.8 s | 0.65 × 1.0 = 0.65 ✓ | 0.65 × 1.75 = 1.14 ✗ | accept / reject |
-| Supreme | 0.5 s | 0.65 > 0.5 ✗ | — | reject |
-| loglikelihood Supreme | 0.5 s | 0.08 × 1.0 = 0.08 ✓ | 0.08 × 1.75 = 0.14 ✓ | always accept |
+### Check 2 — Queue-depth-aware latency estimate
+
+This is the primary admission gate. It estimates how long a newly accepted task will actually take to complete, factoring in the current state of SGLang's internal queue:
+
+```
+queue_factor      =  W / R
+estimated_latency =  ewma[(task_type, sla)] × (1 + queue_factor)
+
+accept  ←→  estimated_latency < SLA_TTFT[sla]
+```
+
+**What W and R mean:**
+
+| Symbol | Source | Meaning |
+|--------|--------|---------|
+| `W` | `num_waiting_reqs` from SGLang `/server_info` | Tasks queued inside SGLang, waiting for a GPU slot |
+| `R` | `num_running_reqs` from SGLang `/server_info` | Tasks currently executing on the GPU |
+
+**Intuition behind W/R:** if 4 tasks are waiting and 2 are running (`W/R = 2`), a newly admitted task must wait through approximately 2 full inference cycles before it gets a GPU slot. Its total time-to-submit is therefore roughly `ewma × (1 + 2) = 3 × ewma`.
+
+Both values are polled from SGLang's `/server_info` endpoint every **0.5 s** (by the dashboard coroutine) so the signal stays fresh without adding latency to the hot `/query → /ask` path.
+
+**Why W/R is better than a simple `active_count / max_concurrent` ratio:**
+
+The old approach used a fixed logical concurrency ratio (`load_ratio = active_count / 24`). This was blind to task length: 24 fast `loglikelihood` requests and 24 slow `generate_until` requests look identical to a `load_ratio`-based scheduler, even though the latter causes 10× more queue pressure on the GPU. With W/R, slow tasks naturally inflate both W and R, making the queue_factor rise sooner and tighten admission automatically — no tuning required.
+
+**EWMA buckets:** latency is tracked independently per `(task_type, sla)` combination (24 buckets: 8 SLA × 3 types, α = 0.3). A burst of slow Bronze `generate_until` tasks never inflates the EWMA for Supreme `loglikelihood` tasks.
+
+**Cold start:** when EWMA is `None` (no history yet), Check 2 is skipped and all tasks are accepted up to the cap. These early tasks act as probes to seed the EWMA quickly.
+
+**Numerical examples** with `ewma[("generate_until", "Glorious")] = 0.65 s`:
+
+| Queue state (W, R) | queue_factor | Estimated latency | SLA limit | Decision |
+|---|---|---|---|---|
+| W=0, R=4 (idle) | 0.0 | 0.65 × 1.00 = 0.65 s | 0.8 s | **accept** |
+| W=2, R=4 (light) | 0.5 | 0.65 × 1.50 = 0.98 s | 0.8 s | **reject** |
+| W=1, R=8 (healthy) | 0.125 | 0.65 × 1.13 = 0.73 s | 0.8 s | **accept** |
+| W=6, R=2 (backlog) | 3.0 | 0.65 × 4.00 = 2.60 s | 0.8 s | **reject** |
+
+For a `loglikelihood` Supreme task with `ewma = 0.08 s`, even `W=6, R=2` gives `0.08 × 4 = 0.32 s < 0.5 s` — accepted, because short tasks can still beat tight SLAs even under backlog.
+
+---
+
+### Check 3 — Probe mechanism (anti-starvation)
+
+If the same `(task_type, sla)` key is rejected by Check 2 for `PROBE_THRESHOLD = 8` **consecutive** times, the scheduler force-accepts one task regardless of the latency estimate. This serves two purposes:
+
+1. Refreshes the EWMA with a current sample (prevents stale data from permanently blocking a task category)
+2. Ensures every task type eventually gets serviced even under sustained high load
+
+After a force-accept the consecutive-rejection counter resets to zero.
+
+---
+
+### Decision flow summary
+
+```
+query() returns overview
+        │
+        ▼
+active_count >= 64?  ──YES──► reject
+        │NO
+        ▼
+ewma[(type, sla)] == None?  ──YES──► accept  (cold start probe)
+        │NO
+        ▼
+queue_factor = W / R
+estimated   = ewma × (1 + queue_factor)
+estimated >= SLA_TTFT?  ──YES──► consec_rejects++
+        │                          consec_rejects >= 8? ──YES──► force-accept (probe)
+        │NO                                              └──NO──► reject
+        ▼
+accept
+```
 
 ---
 
@@ -228,8 +293,8 @@ t=0.05s  Poller: POST /query →
           "eval_sampling_param": "ExtremePenalty", "eval_timeout_s": 0.5}
 
          scheduler.should_accept():
-           load_ratio = 0/8 = 0.0 < threshold(Supreme=0.3) ✓
-           avg_latency("generate_until", "Supreme") = None (cold start) ✓
+           active_count=0 < max_concurrent=64 ✓
+           ewma("generate_until", "Supreme") = None → cold start, skip latency check ✓
          → ACCEPT
 
          POST /ask {task_id: 1, sla: "Supreme"} →
@@ -251,7 +316,9 @@ t=0.06s  Poller: POST /query →
           "eval_timeout_s": 10.0}
 
          scheduler.should_accept():
-           load_ratio = 1/8 = 0.125 < threshold(Bronze=1.0) ✓
+           active_count=1 < 64 ✓
+           queue_factor = W/R = 0/1 = 0.0 (SGLang idle)
+           ewma("loglikelihood","Bronze") = None → cold start ✓
          → ACCEPT
 
          POST /ask {task_id: 2, sla: "Bronze"} →
@@ -451,7 +518,7 @@ python -m pytest tests/test_inference.py -m integration -v
 
 1. ~~**Async concurrent task processing**~~ ✅ **Done** — `asyncio.create_task` per accepted task; `process_messages()` uses `asyncio.gather` for intra-task message parallelism
 2. ~~**Contestant-side priority queue**~~ ✅ **Done** — `asyncio.PriorityQueue` dispatches highest `w_sla × w_task` tasks first; SGLang receives `priority` field per request
-3. ~~**Dynamic EWMA latency scheduler**~~ ✅ **Done** — per-task-type EWMA (α=0.3) + load-ratio queuing factor replaces static thresholds; probe mechanism prevents deadlock
+3. ~~**Dynamic EWMA latency scheduler**~~ ✅ **Done** — per-(task_type, sla) EWMA (α=0.3) + SGLang queue-depth factor `W/R` replaces static `load_ratio`; probe mechanism prevents starvation; SGLang queue polled every 0.5 s
 4. ~~**SGLang startup flags**~~ ✅ **Done** — `--schedule-policy fcfs --enable-priority-scheduling --chunked-prefill-size 4096`
 5. ~~**Terminal dashboard**~~ ✅ **Done** — `rich.live.Live` dashboard in `dashboard.py`: score+rate, task stats, latency P95/hit%, task throughput
 6. ~~**logprob API fix**~~ ✅ **Done** — replaced invalid `input_token_logprobs:True` with `logprob_start_len:0`; loglikelihood now returns real values
