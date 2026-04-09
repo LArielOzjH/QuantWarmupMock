@@ -1,8 +1,5 @@
 ---
-title: "在线推理调度系统：完整技术文档"
-subtitle: "Quan't 队内技术分享"
-author: "Quan't Team"
-date: "2026 年 4 月"
+title: "Quant Competition"
 lang: zh-CN
 geometry: "margin=2.5cm"
 fontsize: 11pt
