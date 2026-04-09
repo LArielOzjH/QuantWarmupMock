@@ -21,6 +21,8 @@ build/
 # Plan and competition documents (local only)
 PLAN.md
 *.pdf
+# Exception: track compiled technical reports
+!report/*.pdf
 
 # macOS
 .DS_Store
