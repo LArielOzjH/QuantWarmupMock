@@ -97,12 +97,13 @@ class Scheduler:
     tasks within max_concurrent are accepted.
     """
 
-    def __init__(self, max_concurrent: int = 8):
+    def __init__(self, max_concurrent: int = 64):
         self.max_concurrent = max_concurrent
         self._active: set[int] = set()
         self.latency = LatencyTracker(window=50)
         self._consec_rejects: dict[tuple, int] = {}  # (task_type, sla) → consecutive latency-based rejections
-        self._sglang_waiting: int = 0  # SGLang internal waiting queue depth (real-time, for display)
+        self._sglang_waiting: int = 0  # SGLang internal waiting queue depth (real-time)
+        self._sglang_running: int = 1  # SGLang internal running count (real-time); default 1 avoids div-by-zero
 
     @property
     def active_count(self) -> int:
@@ -112,9 +113,10 @@ class Scheduler:
     def load_ratio(self) -> float:
         return self.active_count / self.max_concurrent
 
-    def update_sglang_queue(self, waiting: int) -> None:
-        """Update the SGLang internal waiting queue depth (used for dashboard display)."""
+    def update_sglang_queue(self, waiting: int, running: int = 1) -> None:
+        """Update SGLang internal queue stats (used for both scheduling decisions and display)."""
         self._sglang_waiting = waiting
+        self._sglang_running = max(running, 1)  # guard against 0 to avoid div-by-zero
 
     def should_accept(self, overview: dict) -> bool:
         """Dynamically estimate completion time and decide whether to accept the task.
@@ -130,14 +132,19 @@ class Scheduler:
         task_type = overview.get("eval_request_type", "generate_until")
         key       = (task_type, sla)
 
-        # 1. Hard concurrency cap
-        if self.load_ratio >= 1.0:
+        # 1. Hard concurrency cap (emergency safety net only; primary control is queue_factor below)
+        if self.active_count >= self.max_concurrent:
             return False
 
-        # 2. Dynamic latency estimate (skipped during cold start when ewma=None)
+        # 2. Dynamic latency estimate using SGLang queue depth (skipped during cold start when ewma=None)
+        # queue_factor = W/R: if W=4 tasks waiting and R=2 running, a new task waits ~2 inference
+        # cycles before getting a GPU slot → estimated latency = ewma × (1 + W/R).
+        # This is task-length-aware: slow generate_until tasks inflate W and saturate R faster,
+        # causing queue_factor to rise sooner than a fixed load_ratio would.
         ewma = self.latency.ewma_latency(task_type, sla)
         if ewma is not None:
-            estimated = ewma * (1.0 + self.load_ratio)
+            queue_factor = self._sglang_waiting / self._sglang_running
+            estimated = ewma * (1.0 + queue_factor)
             sla_limit = SLA_TTFT.get(sla, 600.0)
             if estimated >= sla_limit:
                 count = self._consec_rejects.get(key, 0) + 1

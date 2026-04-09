@@ -217,12 +217,15 @@ async def run_dashboard(
                 except Exception:
                     pass
 
-                # every 4 ticks (2s) update SGLang queue depth
-                if tick % 4 == 0 and inference is not None:
+                # every tick (0.5s) update SGLang queue depth — now used for scheduling decisions
+                if inference is not None:
                     try:
                         info = await inference.server_info()
                         if info:
-                            scheduler.update_sglang_queue(info.get("num_waiting_reqs", 0))
+                            scheduler.update_sglang_queue(
+                                info.get("num_waiting_reqs", 0),
+                                info.get("num_running_reqs", 1),
+                            )
                     except Exception:
                         pass
 
