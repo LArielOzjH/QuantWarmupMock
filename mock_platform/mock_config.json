@@ -1,7 +1,7 @@
 {
   "platform_url": "http://localhost:8003",
-  "model_name": "Qwen3-0.6B",
-  "model_path": "/Users/hanzhuojun/Model/Qwen3-0.6B",
+  "model_name": "Qwen3-32B",
+  "model_path": "${MODEL_PATH}",
   "contestant_port": 9000,
   "duration_s": 3600,
   "sla_levels": {
@@ -20,9 +20,5 @@
     "HighEntropy":    {"temperature": 0.1, "top_p": 0.95, "top_k": 100},
     "ExtremePenalty": {"temperature": 0.1, "top_p": 0.9,  "top_k": 20}
   },
-  "_available_models": {
-    "Qwen3-0.6B":    "/Users/hanzhuojun/Model/Qwen3-0.6B",
-    "gemma-4-E2B-it": "/Users/hanzhuojun/Model/gemma-4-E2B-it"
-  },
-  "_note": "Switch model_name + model_path to use a different local model"
+  "_note": "model_path 使用 ${MODEL_PATH} 占位，由平台环境变量注入；本地热身测试时手动替换为实际路径"
 }

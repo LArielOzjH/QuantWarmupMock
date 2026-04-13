@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 正式预赛启动脚本
-# 平台注入的环境变量：MODEL_PATH、CONFIG_PATH、CONTESTANT_PORT
+# 正式预赛启动脚本（有时限，耗时操作已在 setup.sh 完成）
+# 平台注入的环境变量：MODEL_PATH、CONFIG_PATH、CONTESTANT_PORT、TEAM_NAME、TEAM_TOKEN
 set -e
 
 # 激活虚拟环境（若 setup.sh 创建了的话）
@@ -49,9 +49,13 @@ python -m sglang.launch_server \
     --sampling-backend "${SMPL_BACKEND}" &
 SGLANG_PID=$!
 
-# 等待 SGLang 就绪（最多 55s，run.sh 总时限 60s）
+# 等待 SGLang 就绪
+# Triton JIT 已在 setup.sh 预编译缓存，run.sh 主要耗时为：
+#   - 32B 权重加载：~40s（4×H100，bf16）
+#   - CUDA graph build：~20-40s
+# 共约 60-90s，等待上限设为 120s
 echo "Waiting for SGLang to be ready..."
-for i in $(seq 1 55); do
+for i in $(seq 1 120); do
     if curl -sf http://localhost:30000/health > /dev/null 2>&1; then
         echo "SGLang ready after ${i}s"
         break
