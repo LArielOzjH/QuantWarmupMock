@@ -37,6 +37,9 @@ echo "Using attention backend: ${ATTN_BACKEND}, sampling backend: ${SMPL_BACKEND
 # --chunked-prefill-size 4096 : chunked prefill to reduce long-prompt impact on short-SLA TTFT
 # --attention-backend         : triton for Blackwell (SM 12.x), flashinfer otherwise
 # --sampling-backend          : pytorch for Blackwell (flashinfer sampling JIT also fails on SM 12.x)
+# --disable-cuda-graph        : skip CUDA graph build（20-40s）以满足 60s 启动时限。
+#   CUDA graph 无法跨进程缓存，必须每次 build；禁用后对高并发 decode batch 吞吐影响极小。
+#   Triton JIT 已在 setup.sh 预编译缓存，实际权重加载约 35-45s，可在时限内完成。
 python -m sglang.launch_server \
     --model-path "${MODEL_PATH}" \
     --host 0.0.0.0 \
@@ -46,16 +49,15 @@ python -m sglang.launch_server \
     --enable-priority-scheduling \
     --chunked-prefill-size 4096 \
     --attention-backend "${ATTN_BACKEND}" \
-    --sampling-backend "${SMPL_BACKEND}" &
+    --sampling-backend "${SMPL_BACKEND}" \
+    --disable-cuda-graph &
 SGLANG_PID=$!
 
 # 等待 SGLang 就绪
-# Triton JIT 已在 setup.sh 预编译缓存，run.sh 主要耗时为：
-#   - 32B 权重加载：~40s（4×H100，bf16）
-#   - CUDA graph build：~20-40s
-# 共约 60-90s，等待上限设为 120s
+# Triton JIT 已在 setup.sh 预编译缓存，CUDA graph 已禁用，
+# run.sh 主要耗时仅为 32B 权重加载（4×GPU，bf16，约 35-45s）
 echo "Waiting for SGLang to be ready..."
-for i in $(seq 1 120); do
+for i in $(seq 1 55); do
     if curl -sf http://localhost:30000/health > /dev/null 2>&1; then
         echo "SGLang ready after ${i}s"
         break
