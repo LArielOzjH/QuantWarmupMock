@@ -128,8 +128,8 @@ class Scheduler:
 
         Returns True to accept, False to reject.
         """
-        sla       = overview.get("target_sla", "Bronze")
-        task_type = overview.get("eval_request_type", "generate_until")
+        sla       = overview.get("target_sla") or "Bronze"
+        task_type = overview.get("eval_request_type") or "generate_until"
         key       = (task_type, sla)
 
         # 1. Hard concurrency cap (emergency safety net only; primary control is queue_factor below)

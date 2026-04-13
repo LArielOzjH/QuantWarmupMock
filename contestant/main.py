@@ -63,8 +63,8 @@ SLA_SGLANG_PRIORITY: dict[str, int] = {
 
 def _task_priority(overview: dict) -> float:
     """Compute task priority score (negative, for min-heap; larger absolute value = more urgent)."""
-    sla_w  = SLA_WEIGHTS.get(overview.get("target_sla", "Bronze"), 1.0)
-    task_w = TASK_WEIGHTS.get(overview.get("eval_request_type", "generate_until"), 1.0)
+    sla_w  = SLA_WEIGHTS.get(overview.get("target_sla") or "Bronze", 1.0)
+    task_w = TASK_WEIGHTS.get(overview.get("eval_request_type") or "generate_until", 1.0)
     return -(sla_w * task_w)
 
 
@@ -85,8 +85,10 @@ async def handle_task(
     LatencyTracker so future should_accept() decisions improve over time.
     """
     task_id   = task_data["overview"]["task_id"]
-    sla       = overview.get("target_sla", "Bronze")
-    task_type = overview.get("eval_request_type", "generate_until")
+    sla       = overview.get("target_sla") or "Bronze"
+    # eval_request_type may be null on official platform (tasks are mixed-type);
+    # default to generate_until which dominates latency for EWMA tracking
+    task_type = overview.get("eval_request_type") or "generate_until"
     loop      = asyncio.get_event_loop()
     t_start   = loop.time()
 
@@ -215,7 +217,7 @@ async def main() -> None:
                 dash_state.sla_counts[sla] = dash_state.sla_counts.get(sla, 0) + 1
             log.info(
                 f"Task {task_id} accepted | SLA={sla} "
-                f"type={overview['eval_request_type']} "
+                f"type={overview.get('eval_request_type') or 'mixed'} "
                 f"sp={overview.get('eval_sampling_param', '?')} "
                 f"prio={-priority:.1f}"
             )
