@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 环境准备脚本（平台在 run.sh 前执行一次，结果被缓存）
-# 所有耗时操作放此处：pip 安装 + Triton JIT 预编译
-# run.sh 严格限时，setup.sh 无时限
+# 环境准备脚本（平台在 run.sh 前执行一次）
+# 所有耗时操作放此处：pip 安装 + SGLang 完整预热（含 CUDA graph build）
+# run.sh 严格限时；setup.sh 无时限，且 SGLang 进程可在此启动后持续运行至 run.sh
 set -e
 
 python3 -m venv .venv
@@ -24,13 +24,16 @@ pip install flash-attn --no-build-isolation 2>/dev/null \
     && echo "flash-attn installed." \
     || echo "WARNING: flash-attn not installed, SGLang will use fallback attention."
 
-# ── Triton JIT 预编译 ────────────────────────────────────────────────
-# SGLang 首次使用 Triton backend 时需即时编译 CUDA kernel（可达数分钟），
-# 编译产物缓存于 ~/.triton/cache（跨进程持久化）。
-# 在此启动一次 warmup server、发送 generate / logprob 请求触发所有 JIT 路径，
-# run.sh 启动时直接命中缓存，大幅缩短实际上线时间。
+# ── SGLang 完整预热（Triton JIT + CUDA graph）────────────────────────
+# 官方平台确认：setup.sh 可传递环境变量（含 MODEL_PATH），且允许在此
+# build CUDA graph。启动的 SGLang 进程在 setup.sh 退出后继续运行，
+# run.sh 检测到服务已就绪后直接启动 contestant，无需重新拉起推理服务。
+#
+# 启动流程：
+#   setup.sh → launch SGLang (port 30000) → warmup → exit（进程保留）
+#   run.sh   → health check 通过（即时）→ 启动 contestant.main
 if [ -n "${MODEL_PATH}" ]; then
-    echo "==> 预编译 Triton JIT kernel（一次性，结果缓存至磁盘）..."
+    echo "==> 启动 SGLang 并完整预热（Triton JIT + CUDA graph）..."
 
     TP_SIZE=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
     echo "检测到 ${TP_SIZE} 块 GPU"
@@ -45,25 +48,27 @@ except Exception:
 EOF
 )
     SMPL_BACKEND=$( [ "${ATTN_BACKEND}" = "triton" ] && echo "pytorch" || echo "flashinfer" )
-    echo "Warmup backend: attention=${ATTN_BACKEND}, sampling=${SMPL_BACKEND}"
+    echo "Backend: attention=${ATTN_BACKEND}, sampling=${SMPL_BACKEND}"
 
-    # 在 31000 端口启动 warmup 实例（与 run.sh 的 30000 端口隔离）
+    # 使用与 run.sh 完全相同的参数启动（port 30000），setup 退出后进程持续运行
     python -m sglang.launch_server \
         --model-path "${MODEL_PATH}" \
-        --host 127.0.0.1 --port 31000 \
+        --host 0.0.0.0 \
+        --port 30000 \
         --tp-size "${TP_SIZE}" \
+        --schedule-policy fcfs \
+        --enable-priority-scheduling \
+        --chunked-prefill-size 4096 \
         --attention-backend "${ATTN_BACKEND}" \
         --sampling-backend "${SMPL_BACKEND}" \
-        --chunked-prefill-size 4096 \
         &
-    WARMUP_PID=$!
 
-    # setup.sh 无严格时限，最多等 8 分钟（32B 模型权重加载 + CUDA graph build）
-    echo "等待 warmup server 就绪（最多 480s）..."
+    # setup.sh 无严格时限，最多等 8 分钟（权重加载 + CUDA graph build）
+    echo "等待 SGLang 就绪（最多 480s）..."
     READY=0
     for i in $(seq 1 480); do
-        if curl -sf http://127.0.0.1:31000/health > /dev/null 2>&1; then
-            echo "Warmup server 就绪，耗时 ${i}s"
+        if curl -sf http://localhost:30000/health > /dev/null 2>&1; then
+            echo "SGLang 就绪，耗时 ${i}s"
             READY=1
             break
         fi
@@ -71,11 +76,11 @@ EOF
     done
 
     if [ "${READY}" = "1" ]; then
-        # 触发 generate_until 和 logprob 两条 JIT 路径
+        # 发送 warmup 请求，触发 generate / logprob 两条推理路径的完整预热
         python3 - <<'PYEOF'
 import requests
 
-BASE = "http://127.0.0.1:31000"
+BASE = "http://localhost:30000"
 
 print("  Warmup: generate_until 路径...")
 requests.post(f"{BASE}/v1/completions", json={
@@ -93,15 +98,13 @@ requests.post(f"{BASE}/generate", json={
     "logprob_start_len": 0,
 }, timeout=120)
 
-print("  Triton JIT warmup 完成。")
+print("  SGLang 预热完成，进程持续运行等待 run.sh 接管。")
 PYEOF
+        echo "==> setup.sh 完成，SGLang 在后台持续运行。"
     else
-        echo "WARNING: Warmup server 未能在规定时间内就绪，跳过 JIT 预编译。"
+        echo "WARNING: SGLang 未能在规定时间内就绪。"
+        echo "  run.sh 将尝试重新启动 SGLang。"
     fi
-
-    kill "${WARMUP_PID}" 2>/dev/null || true
-    wait "${WARMUP_PID}" 2>/dev/null || true
-    echo "==> Triton JIT 预编译完成。"
 else
-    echo "MODEL_PATH 未设置，跳过 SGLang warmup（本地开发模式）。"
+    echo "MODEL_PATH 未设置，跳过 SGLang 启动（本地开发模式）。"
 fi
