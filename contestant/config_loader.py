@@ -15,7 +15,7 @@ class ContestConfig:
 
 
 def load_config() -> ContestConfig:
-    path = os.environ.get("CONFIG_PATH", "mock_platform/mock_config.json")
+    path = os.environ.get("CONFIG_PATH", "contest.json")
     with open(path) as f:
         d = json.load(f)
     # 环境变量优先于 JSON 文件（平台注入的值以 env var 为准）

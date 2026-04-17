@@ -1,9 +1,8 @@
 """
 Contestant service entry point
 
-Warmup launch:
+Local dev (ubiservice running on :8003, SGLang on :30000):
     CONFIG_PATH=mock_platform/mock_config.json \\
-    TEAM_TOKEN=mytoken \\
     SGLANG_URL=http://localhost:30000 \\
     python -m contestant.main
 

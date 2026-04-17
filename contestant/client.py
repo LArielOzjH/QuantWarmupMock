@@ -1,7 +1,7 @@
 """
 Platform API client
 
-Wraps the four HTTP endpoints of the evaluation platform (real or mock):
+Wraps the four HTTP endpoints of the evaluation platform:
     POST /register
     POST /query
     POST /ask
