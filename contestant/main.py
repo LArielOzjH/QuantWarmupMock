@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-TEAM_NAME         = os.environ.get("TEAM_NAME",  "team_alpha")
-TOKEN             = os.environ.get("TEAM_TOKEN", "secret_token")
+TEAM_NAME         = os.environ.get("TEAM_NAME",  "quan't")
+TOKEN             = os.environ.get("TEAM_TOKEN", "6010800a93a86d27da7c2cfdad28c2d2")
 SGLANG_URL        = os.environ.get("SGLANG_URL", "http://localhost:30000")
 DURATION_OVERRIDE = os.environ.get("DURATION_OVERRIDE")
 
