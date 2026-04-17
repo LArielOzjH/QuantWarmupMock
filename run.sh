@@ -51,13 +51,21 @@ SGLANG_PID=$!
 
 # 等待 SGLang 就绪（60s 时限内；主要耗时为权重加载 ~40s + CUDA graph build）
 echo "Waiting for SGLang to be ready..."
+SGLANG_READY=0
 for i in $(seq 1 55); do
     if curl -sf http://localhost:30000/health > /dev/null 2>&1; then
         echo "SGLang ready after ${i}s"
+        SGLANG_READY=1
         break
     fi
     sleep 1
 done
+
+if [ "${SGLANG_READY}" = "0" ]; then
+    echo "ERROR: SGLang did not become ready within 55s, aborting." >&2
+    kill "${SGLANG_PID}" 2>/dev/null || true
+    exit 1
+fi
 
 # 启动选手调度客户端（前台运行，持续整个比赛时长）
 SGLANG_URL=http://localhost:30000 \
